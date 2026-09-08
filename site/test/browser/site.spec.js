@@ -182,6 +182,41 @@ test("OMP engine control supports keyboard selection and command copy", async ({
   expect(runtimeErrors).toEqual([]);
 });
 
+test("footer build-metadata link is distinguishable and keyboard operable", async ({ page }) => {
+  await page.goto("/");
+  const link = page.locator("a.footer-build-link");
+  await expect(link).toHaveAttribute("href", "/version.json");
+  const underline = await link.evaluate((element) => getComputedStyle(element).textDecorationLine);
+  expect(underline).toContain("underline");
+  await link.focus();
+  const outline = await link.evaluate((element) => getComputedStyle(element).outlineStyle);
+  expect(["solid", "auto"]).toContain(outline);
+});
+
+test("engine command scroll region is keyboard reachable with and without JS", async ({ browser }) => {
+  for (const javaScriptEnabled of [true, false]) {
+    const context = await browser.newContext({ javaScriptEnabled });
+    const page = await context.newPage();
+    await page.goto("/coder/");
+    // With JavaScript the non-selected panels are hidden, so focus the
+    // default-selected opencode panel in both modes; without JS every panel
+    // stays visible, and the omp region is additionally exercised there.
+    const region = page.locator('[data-engine-panel="opencode"] .engine-command-scroll');
+    await expect(region).toContainText('triss coder run --engine opencode "your task"');
+    await expect(region).toHaveAttribute("role", "region");
+    await expect(region).toHaveAttribute("aria-label", /opencode setup command/i);
+    await region.focus();
+    await expect(region).toBeFocused();
+    if (!javaScriptEnabled) {
+      const omp = page.locator('[data-engine-panel="omp"] .engine-command-scroll');
+      await expect(omp).toContainText('triss coder run --engine omp "your task"');
+      await omp.focus();
+      await expect(omp).toBeFocused();
+    }
+    await context.close();
+  }
+});
+
 test("command search renders hostile input only as text", async ({ page }) => {
   await page.goto("/commands/");
   const hostile = '<img src=x onerror="window.__siteXss = true">';

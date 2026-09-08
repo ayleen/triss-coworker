@@ -28,10 +28,22 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildProgram } from '../src/cli-program.js';
+import { loadIntegrations } from '../src/integrations/_registry.js';
 import { assembleTools } from '../src/mcp/tools.js';
 import { CANONICAL_PROVIDER_IDS } from '../src/provider-contract.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+function jsonSafeDefault(value) {
+  if (value === undefined) return null;
+  if (typeof value === 'function' || typeof value === 'symbol') return null;
+  try {
+    JSON.stringify(value);
+  } catch {
+    return null;
+  }
+  return value;
+}
 
 function commandInventory(program) {
   const commands = [];
@@ -50,9 +62,16 @@ function commandInventory(program) {
         options: command.options.map((opt) => ({
           flags: opt.flags,
           description: opt.description || '',
-          required: Boolean(opt.required),
-          hasValue: opt.flags.includes('<') || opt.flags.includes('['),
-          defaultValue: opt.defaultValue === undefined ? null : String(opt.defaultValue),
+          // Commander semantics: `mandatory` = the option itself must be
+          // present (requiredOption); `valueRequired` = the option consumes
+          // a value when present. The old single `required` field conflated
+          // the two and is intentionally no longer published.
+          mandatory: opt.mandatory === true,
+          valueRequired: opt.required === true,
+          variadic: opt.variadic === true || /\.\.\./.test(opt.flags),
+          // JSON-compatible defaults keep their native type; anything not
+          // JSON-serializable is published as null.
+          defaultValue: jsonSafeDefault(opt.defaultValue),
         })),
       });
     }
@@ -84,8 +103,12 @@ const MCP_FIXTURES = [
   { id: 'all-integrations', readyIntegrations: ['jira', 'linear', 'github', 'gitlab', 'confluence'], coderReady: true, label: 'Every integration ready + coder' },
 ];
 
-export function collectPublicReference() {
-  const program = buildProgram({ integrations: [] });
+export async function collectPublicReference() {
+  // Integration commands are part of the executable CLI, so the inventory
+  // must include them — without running their bootstrap hooks (no
+  // credential child processes, no env priming).
+  const integrations = await loadIntegrations({ bootstrap: false });
+  const program = buildProgram({ integrations });
   const cli = commandInventory(program);
 
   const mcp = MCP_FIXTURES.map((fixture) => ({
@@ -193,13 +216,13 @@ export function renderArtifacts(reference) {
   };
 }
 
-export function artifactPaths() {
-  return Object.keys(renderArtifacts(collectPublicReference()));
+export async function artifactPaths() {
+  return Object.keys(renderArtifacts(await collectPublicReference()));
 }
 
-function main() {
+async function main() {
   const check = process.argv.includes('--check');
-  const artifacts = renderArtifacts(collectPublicReference());
+  const artifacts = renderArtifacts(await collectPublicReference());
   const changed = [];
   for (const [relPath, content] of Object.entries(artifacts)) {
     const abs = join(REPO_ROOT, relPath);

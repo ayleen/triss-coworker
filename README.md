@@ -302,7 +302,7 @@ Engine details:
 
 If the wizard has not already connected your host, choose Claude Code or Codex in the [host-connection guide](https://triss.work/docs/getting-started/#step-4). Only run setup for the host you intend to use.
 
-Core tools include `triss_ask`, `triss_chat`, `triss_fetch`, `triss_review`, `triss_write`, `triss_commit_msg`, `triss_status`, and the migration/update surfaces. Coder tools appear when any canonical provider credential is configured. Tracker tools appear only when their integration credential is ready.
+Core tools include `triss_ask`, `triss_chat`, `triss_fetch`, `triss_review`, `triss_review_shard`, `triss_write`, `triss_commit_msg`, and `triss_status`. Updates and migration stay CLI-side: the MCP server emits passive update notices but exposes no update or migration tool. Coder tools appear when any canonical provider credential is configured. Tracker tools appear only when their integration credential is ready.
 
 The MCP schemas use the same `provider`, `model`, `effort`, and engine contracts as the CLI. Full reference: [MCP](https://github.com/ayleen/triss-coworker/blob/main/docs/mcp.md).
 

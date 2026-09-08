@@ -54,7 +54,14 @@ export function getCoreManifest() {
   return CORE_MANIFEST;
 }
 
-export async function loadIntegrations({ dir = HERE } = {}) {
+// `bootstrap: false` returns the validated manifests WITHOUT running their
+// bootstrap hooks (e.g. github primes process.env from `gh auth token`, a
+// credential child process). Consumers that only need the declarative shape
+// — command registration, descriptions, env metadata — such as the public
+// reference generator and the docs contract checks, MUST pass
+// bootstrap: false so inventorying the CLI never spawns credentials or any
+// other startup side effect. The executable path keeps the default (true).
+export async function loadIntegrations({ dir = HERE, bootstrap = true } = {}) {
   const entries = readdirSync(dir);
   const integrations = [];
   for (const entry of entries) {
@@ -74,7 +81,7 @@ export async function loadIntegrations({ dir = HERE } = {}) {
     // Optional bootstrap hook — lets an integration prime process.env from
     // an out-of-band source (e.g. github reads `gh auth token` when the
     // user hasn't exported GITHUB_TOKEN). Best-effort; failures are swallowed.
-    if (typeof manifest.bootstrap === 'function') {
+    if (bootstrap && typeof manifest.bootstrap === 'function') {
       try {
         await manifest.bootstrap();
       } catch {

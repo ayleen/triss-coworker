@@ -4,7 +4,7 @@
 const LINK_PATTERN = /\[[^\]]*\]\(([^)]+)\)/g;
 const ROOT_DOC_REFERENCE_PATTERN = /(?<![A-Za-z0-9_./:-])(?:\.\/)?(docs\/[A-Za-z0-9._/-]+\.md)\b/gu;
 
-function withoutFencedCode(source) {
+export function withoutFencedCode(source) {
   let fence = null;
   const visible = [];
   for (const line of source.split('\n')) {
@@ -25,7 +25,7 @@ function withoutFencedCode(source) {
   return visible.join('\n');
 }
 
-function withoutCode(source) {
+export function withoutCode(source) {
   return withoutFencedCode(source).split('\n').map(withoutInlineCode).join('\n');
 }
 

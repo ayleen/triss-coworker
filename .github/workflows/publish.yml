@@ -149,6 +149,26 @@ jobs:
       - run: npm ci
       - name: Verify root npm package contents and consumer lifecycle
         run: npm run check:package
+      # R07: the release notes for this exact version must exist and carry
+      # substantive content BEFORE anything is published. The draft-creation
+      # step later re-uses the same extraction as a second barrier.
+      - name: Validate versioned release notes exist (never Unreleased)
+        env:
+          TAG_VERSION: ${{ github.ref_name }}
+        run: node scripts/release-notes.js --tag "$TAG_VERSION" > /dev/null
+      - name: Verify packaged documentation (pre-publish, local tarball)
+        run: |
+          # R01 pre-publish half: run the same packaged-docs validator on the
+          # local tarball that documentation-acceptance later runs on the
+          # downloaded registry tarball, so a doc regression fails the gates
+          # before any publication instead of after npm-publish.
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/prepublish-pack"
+          EXTRACT_DIR="$RUNNER_TEMP/prepublish-extract"
+          mkdir -p "$PACK_DIR" "$EXTRACT_DIR"
+          npm pack --ignore-scripts --pack-destination "$PACK_DIR" . >/dev/null
+          tar -xzf "$PACK_DIR"/triss-coworker-*.tgz -C "$EXTRACT_DIR"
+          node scripts/verify-published-docs.mjs --package-root "$EXTRACT_DIR/package" --version "$(node -p "require('./package.json').version")"
       - name: Verify tag matches both package versions
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -600,6 +620,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
+          cache: npm
+      # The validator imports the CLI tree (Commander) for runnable-example
+      # checks, so it needs the checkout's dependencies installed.
+      - run: npm ci
       - name: Accept published documentation for this version
         env:
           TAG_VERSION: ${{ github.ref_name }}

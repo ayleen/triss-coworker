@@ -7,7 +7,12 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildReleaseNotes, extractVersionSection } from '../scripts/release-notes.js';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const FIXTURE = `# Changelog
 
@@ -65,6 +70,47 @@ test('rendered notes carry the structured sections and tag-pinned doc links', ()
   assert.ok(!notes.includes('unreleased feature'));
 });
 
+test('R07: empty or placeholder-only release sections fail closed', () => {
+  const cases = {
+    'subsection without entries': '## [0.50.0] — 2026-09-12\n\n### Fixed\n',
+    'placeholder-only entry': '## [0.50.0] — 2026-09-12\n\n### Fixed\n\n- TBD\n',
+    'comment-only section': '## [0.50.0] — 2026-09-12\n\n### Fixed\n\n<!-- nothing yet -->\n',
+    'marker only inside a code fence': [
+      '## [0.50.0] — 2026-09-12',
+      '',
+      'Example:',
+      '',
+      '```md',
+      '### Fixed',
+      '',
+      '- a real-looking entry inside a code sample',
+      '```',
+    ].join('\n'),
+  };
+  for (const [label, changelog] of Object.entries(cases)) {
+    assert.throws(
+      () => buildReleaseNotes({ tag: 'v0.50.0', changelog, enginesNode: '>=22.12.0' }),
+      /no substantive content/,
+      `${label} must be rejected`,
+    );
+  }
+  // A missing exact version must fail even when Unreleased has real content.
+  assert.throws(
+    () => buildReleaseNotes({
+      tag: 'v0.51.0',
+      changelog: '## [Unreleased]\n\n### Added\n\n- something real\n',
+      enginesNode: '>=22.12.0',
+    }),
+    /no "## \[0\.51\.0\]" section/,
+  );
+});
+
+test('the real published 0.44.0 section passes the content guard', () => {
+  const changelog = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8');
+  const notes = buildReleaseNotes({ tag: 'v0.44.0', changelog, enginesNode: '>=22.12.0' });
+  assert.match(notes, /## What changed/);
+});
+
 test('malformed tags and boilerplate-only sections fail closed', () => {
   assert.throws(
     () => buildReleaseNotes({ tag: 'not-a-version', changelog: FIXTURE, enginesNode: '>=22.12.0' }),
@@ -76,6 +122,6 @@ test('malformed tags and boilerplate-only sections fail closed', () => {
       changelog: '## [Unreleased]\n\n## [0.46.0] — 2026-09-11\n\nTBD\n',
       enginesNode: '>=22.12.0',
     }),
-    /no substantive subsections/,
+    /no substantive content/,
   );
 });

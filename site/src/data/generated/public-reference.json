@@ -17,36 +17,41 @@
         {
           "flags": "-g, --global",
           "description": "install into the target agent global rules file instead of the current project",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-t, --target <agent>",
           "description": "target agent (claude | codex | both); omit for an interactive prompt",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-f, --force",
           "description": "force-replace an existing triss block without diffing",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-s, --setup",
           "description": "run the setup wizard before any rules write; preserve the selected init target and scope",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--yes",
           "description": "with --setup: non-interactive apply of a complete headless configuration (required outside a TTY)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -59,106 +64,121 @@
         {
           "flags": "--provider <id>",
           "description": "canonical provider id",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-m, --model <id>",
           "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--engine <id>",
           "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--protect-credentials",
           "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-protect-credentials",
           "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-e, --effort <level>",
           "description": "reasoning effort: low, medium, high, xhigh, or max",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-p, --paths <paths...>",
           "description": "files or globs to read",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": true,
           "defaultValue": null
         },
         {
           "flags": "-u, --urls <urls...>",
           "description": "http(s) URLs to fetch and convert to markdown",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": true,
           "defaultValue": null
         },
         {
           "flags": "--stdin",
           "description": "read piped stdin as an additional source (for `cmd | triss ask --stdin ...`)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-q, --question <text>",
           "description": "question to answer about the corpus",
-          "required": true,
-          "hasValue": true,
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--max-tokens <n>",
           "description": "token budget for reasoning + answer",
-          "required": true,
-          "hasValue": true,
-          "defaultValue": "8192"
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": 8192
         },
         {
           "flags": "--system <text>",
           "description": "override the system prompt",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--format <format>",
           "description": "response format: text (default) or evidence",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--stream",
           "description": "force streaming even when stdout is not a TTY",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-stream",
           "description": "disable streaming output (default streams when stdout is a TTY)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -171,72 +191,82 @@
         {
           "flags": "--provider <id>",
           "description": "canonical provider id",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-m, --model <id>",
           "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--engine <id>",
           "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--protect-credentials",
           "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-protect-credentials",
           "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-e, --effort <level>",
           "description": "reasoning effort: low, medium, high, xhigh, or max",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-s, --spec <text>",
           "description": "what to write",
-          "required": true,
-          "hasValue": true,
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-t, --target <path>",
           "description": "output file path",
-          "required": true,
-          "hasValue": true,
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-c, --context <path>",
           "description": "reference file to mimic in style",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--max-tokens <n>",
           "description": "token budget for reasoning + output",
-          "required": true,
-          "hasValue": true,
-          "defaultValue": "16384"
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": 16384
         }
       ]
     },
@@ -255,8 +285,9 @@
         {
           "flags": "-o, --output <path>",
           "description": "write to file instead of stdout",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -276,71 +307,81 @@
         {
           "flags": "--provider <id>",
           "description": "canonical provider id",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-m, --model <id>",
           "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--engine <id>",
           "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--protect-credentials",
           "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-protect-credentials",
           "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-e, --effort <level>",
           "description": "reasoning effort: low, medium, high, xhigh, or max",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-q, --question <text>",
           "description": "summarise the fetched corpus",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--max-tokens <n>",
           "description": "token budget for the summary",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--timeout <ms>",
           "description": "per-request timeout in ms (default 30000)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--json",
           "description": "output JSON array of {url, markdown}",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -360,78 +401,89 @@
         {
           "flags": "--provider <id>",
           "description": "canonical provider id",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-m, --model <id>",
           "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--engine <id>",
           "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--protect-credentials",
           "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-protect-credentials",
           "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-e, --effort <level>",
           "description": "reasoning effort: low, medium, high, xhigh, or max",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--stdin",
           "description": "read prompt from piped stdin instead of [prompt] arg",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-s, --system <text>",
           "description": "system prompt (e.g. role / persona)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--max-tokens <n>",
           "description": "token budget (default 4096)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--stream",
           "description": "force streaming even when stdout is not a TTY",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-stream",
           "description": "disable streaming output (default streams when stdout is a TTY)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -451,218 +503,249 @@
         {
           "flags": "--explain",
           "description": "print the JSON route decision without executing anything",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--pr <number>",
           "description": "explicitly route to review a GitHub PR",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--base <branch>",
           "description": "explicitly route to review against a base branch",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--review",
           "description": "explicitly route to review",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--skip-issue",
           "description": "forward review linked-ticket lookup suppression",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--paths <path>",
           "description": "explicitly route to ask with a file path; repeat for multiple paths",
-          "required": true,
-          "hasValue": true,
-          "defaultValue": ""
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": []
         },
         {
           "flags": "--urls <url>",
           "description": "explicitly route to ask with a URL; repeat for multiple URLs",
-          "required": true,
-          "hasValue": true,
-          "defaultValue": ""
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": []
         },
         {
           "flags": "--code",
           "description": "explicitly route to coder run",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--chat",
           "description": "explicitly route to chat",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--stdin",
           "description": "let the selected downstream command read piped input",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--provider <name>",
           "description": "forward the inference provider",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-m, --model <name>",
           "description": "forward the model",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-e, --effort <level>",
           "description": "forward reasoning effort",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--max-tokens <n>",
           "description": "forward the token budget",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--format <format>",
           "description": "forward ask/review response format: text or evidence",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--system <text>",
           "description": "forward the system prompt to ask/chat",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--stream",
           "description": "forward streaming preference",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-stream",
           "description": "disable forwarded streaming",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--engine <name>",
           "description": "forward model execution engine",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--agent <name>",
           "description": "forward coder agent template",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--session <id>",
           "description": "forward coder session",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--continue",
           "description": "continue the most recent coder session",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--isolate",
           "description": "forward coder isolation",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-isolate",
           "description": "disable coder isolation",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--allow-best-effort-caller-worktree",
           "description": "forward coder isolation downgrade",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--protect-credentials",
           "description": "forward protected credential mode for model-backed and coder routes",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-protect-credentials",
           "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--restrict",
           "description": "forward coder restriction",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-restrict",
           "description": "disable coder restriction",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--cwd <path>",
           "description": "forward coder working directory",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--timeout <sec>",
           "description": "forward coder timeout",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -675,78 +758,89 @@
         {
           "flags": "--provider <id>",
           "description": "canonical provider id",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-m, --model <id>",
           "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--engine <id>",
           "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--protect-credentials",
           "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-protect-credentials",
           "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-e, --effort <level>",
           "description": "reasoning effort: low, medium, high, xhigh, or max",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--apply",
           "description": "run `git commit -m <generated>` immediately instead of printing",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-conventional",
           "description": "use a free-form commit subject instead of Conventional Commits",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--type <type>",
           "description": "force the conventional type (feat | fix | refactor | …)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--scope <scope>",
           "description": "force the conventional scope",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--max-tokens <n>",
           "description": "token budget (default 2048)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -766,120 +860,137 @@
         {
           "flags": "--provider <id>",
           "description": "canonical provider id",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-m, --model <id>",
           "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--engine <id>",
           "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--protect-credentials",
           "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-protect-credentials",
           "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-e, --effort <level>",
           "description": "reasoning effort: low, medium, high, xhigh, or max",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-b, --base <branch>",
           "description": "compare against this branch (default: auto-detect origin/HEAD or main/master/develop)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--skip-issue",
           "description": "don't try to look up a Jira/Linear ticket from the branch/PR title",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--stdin",
           "description": "read an explicitly piped UTF-8 diff instead of Git or PR sources",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--files <paths...>",
           "description": "literal path selectors: review ONLY these files (repeatable; renames select both sides)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": true,
           "defaultValue": null
         },
         {
           "flags": "--issue <key>",
           "description": "explicit linked-issue key (e.g. PROJ-123); PR prose never triggers tracker access",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-q, --question <text>",
           "description": "override the default review question",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--max-tokens <n>",
           "description": "token budget for the review (default 8192)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--format <format>",
           "description": "response format: text (default) or evidence",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--stream",
           "description": "force streaming even when stdout is not a TTY",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-stream",
           "description": "disable streaming output (default streams when stdout is a TTY)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--payload-mode <mode>",
           "description": "review payload mode: single (default) or shard (sequential whole-file shards; no global verdict)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -892,50 +1003,57 @@
         {
           "flags": "--since <period>",
           "description": "period like 24h, 7d, 4w (default 24h)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--month",
           "description": "shortcut for --since 30d",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--by-project",
           "description": "break down by working directory",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--by-model",
           "description": "break down by model name",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--by-label",
           "description": "break down by call source (ask, review, chat, …)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--json",
           "description": "dump raw log records as JSON",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--reset",
           "description": "clear the usage log (cannot be undone)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -948,8 +1066,9 @@
         {
           "flags": "-t, --target <agent>",
           "description": "agent flavour for headings (claude | codex)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": "claude"
         }
       ]
@@ -968,8 +1087,9 @@
         {
           "flags": "--json",
           "description": "emit one machine-readable migration result",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -982,36 +1102,41 @@
         {
           "flags": "--json",
           "description": "emit one machine-readable status object",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--apply",
           "description": "apply the newer release to a validated standalone install",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--rollback",
           "description": "switch to the previous verified standalone version",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--yes",
           "description": "skip apply/rollback confirmation in non-interactive use",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--break-lock",
           "description": "separately authorize breaking a proven-stale update lock",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1050,85 +1175,97 @@
         {
           "flags": "-g, --global",
           "description": "save to ~/.config/triss/.env (default if not asked)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-l, --local",
           "description": "save to ./.triss.env (project-local override)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-f, --force",
           "description": "re-prompt for values that are already set",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--standard",
           "description": "explicit Easy path (same as the default interactive flow)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--advanced",
           "description": "full Advanced wizard — providers, execution, connections, integrations, runtime",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--yes",
           "description": "non-interactive apply of a complete configuration assembled from existing files, the environment, and explicit flags",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--agent <agent>",
           "description": "headless host intent: claude | codex | both | none (non-TTY default: none)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--install",
           "description": "allow installing missing engines in a headless run (without it, missing dependencies are reported)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--coder-engine <name>",
           "description": "coder target only: coding engine to configure (opencode default, opencode2 beta, crush, or omp — see docs/engines/omp.md). `coder init` uses --engine",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--coder-provider <name>",
           "description": "coder target only: canonical provider id. `coder init` uses --provider",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--coder-protect-credentials",
           "description": "coder target only: configure the parent-owned credential proxy mode instead of the default best_effort_raw. `coder init` uses --protect-credentials",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--coder-no-protect-credentials",
           "description": "coder target only: persist/forward an explicit unprotected choice that overrides TRISS_PROTECT_CREDENTIALS=true",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1154,15 +1291,17 @@
         {
           "flags": "-g, --global",
           "description": "save to global env file",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-l, --local",
           "description": "save to project env file (./.triss.env)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1182,15 +1321,17 @@
         {
           "flags": "-g, --global",
           "description": "check only the global file",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-l, --local",
           "description": "check only the project file",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1203,15 +1344,17 @@
         {
           "flags": "-g, --global",
           "description": "only the global file",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-l, --local",
           "description": "only the project file",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1224,15 +1367,17 @@
         {
           "flags": "-g, --global",
           "description": "only the global path",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-l, --local",
           "description": "only the project path",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1245,15 +1390,17 @@
         {
           "flags": "-g, --global",
           "description": "edit the global file",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-l, --local",
           "description": "edit the project file",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1273,15 +1420,17 @@
         {
           "flags": "-g, --global",
           "description": "global file",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-l, --local",
           "description": "project file",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1300,43 +1449,49 @@
         {
           "flags": "-g, --global",
           "description": "save to the global scope (~/.config/triss/.env, ~/.config/opencode/)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-l, --local",
           "description": "save to the project scope (./.triss.env, ./opencode.json)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--engine <name>",
           "description": "coding engine to configure: opencode (default), opencode2 (beta — shares the opencode.json config; see docs/engines/opencode2.md), crush, or omp (see docs/engines/omp.md)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--provider <name>",
           "description": "canonical model provider id",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--protect-credentials",
           "description": "Use the parent-owned credential proxy and strict executable-surface gates.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw. An explicit --no-protect-credentials\noverrides a persisted TRISS_*_PROTECT_CREDENTIALS=true choice for this run.",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-protect-credentials",
           "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this setup/run",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1356,127 +1511,145 @@
         {
           "flags": "--engine <name>",
           "description": "coding engine: opencode (default), opencode2 (beta — see docs/engines/opencode2.md), crush, or omp (see docs/engines/omp.md)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-e, --effort <level>",
           "description": "reasoning effort: low, medium, high, xhigh, or max",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--session <id>",
           "description": "named session slug for the selected engine; storage and resume compatibility are engine-specific",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--continue",
           "description": "continue a prior session using the selected engine's supported continuation semantics",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--agent <name>",
           "description": "agent template to use (V1 default: coder; opencode2 beta uses its built-in primary agent unless set)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--provider <name>",
           "description": "canonical provider for this one run",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--model <model>",
           "description": "override the main model for this one run: <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--isolate",
           "description": "run in a disposable git worktree under .triss/wt/<slug>",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-isolate",
           "description": "disable worktree isolation (opencode defaults to OFF; crush defaults to ON)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--restrict",
           "description": "crush only: enforce the allowlist via CLI --allow-bash/--allow-tool flags (--restrict-run). Opt-in (default OFF)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-restrict",
           "description": "crush only: disable restrict (crush auto-approves every tool — the default)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--cwd <path>",
           "description": "working directory (ignored with --isolate)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--timeout <sec>",
           "description": "kill the engine after this many seconds",
-          "required": true,
-          "hasValue": true,
-          "defaultValue": "900"
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": 900
         },
         {
           "flags": "--allow-best-effort-caller-worktree",
           "description": "allow downgrade to caller worktree when isolated isolation cannot be enforced (default off — fails before spawn without it)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--protect-credentials",
           "description": "Use the parent-owned credential proxy and strict executable-surface gates.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw. An explicit --no-protect-credentials\noverrides a persisted TRISS_*_PROTECT_CREDENTIALS=true choice for this run.",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--no-protect-credentials",
           "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--stdin",
           "description": "read the prompt from piped stdin instead of the [prompt] argument",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--json",
           "description": "no-op — the envelope is always JSON; kept for symmetry with other commands",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1489,8 +1662,9 @@
         {
           "flags": "--all",
           "description": "force-remove every worktree under .triss/wt, regardless of diff state",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1509,22 +1683,25 @@
         {
           "flags": "--project <absolute-path>",
           "description": "absolute path of the validated project root",
-          "required": true,
-          "hasValue": true,
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--backup <path>",
           "description": "backup destination directory (default: <project>/.triss/backups/<timestamp>)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--json",
           "description": "print the stable machine-readable result (no secrets)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1537,22 +1714,25 @@
         {
           "flags": "--project <absolute-path>",
           "description": "absolute path of the validated project root",
-          "required": true,
-          "hasValue": true,
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--backup <basename>",
           "description": "backup directory to validate",
-          "required": true,
-          "hasValue": true,
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--json",
           "description": "print the stable machine-readable result (no secrets)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1565,8 +1745,9 @@
         {
           "flags": "--from-project-id <32hex>",
           "description": "the old project id (32 lowercase hex) to quarantine",
-          "required": true,
-          "hasValue": true,
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1579,8 +1760,9 @@
         {
           "flags": "--project <absolute-path>",
           "description": "absolute path of the validated project root",
-          "required": true,
-          "hasValue": true,
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1599,8 +1781,9 @@
         {
           "flags": "--engine <name>",
           "description": "coding engine: opencode (default), opencode2, crush, or omp (see docs/engines/omp.md)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1620,15 +1803,17 @@
         {
           "flags": "--engine <name>",
           "description": "coding engine: opencode, opencode2, crush, or omp (MANDATORY)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--recover-live",
           "description": "force-clean a reserved/running session whose owner process may still appear live (you attest the owner is really gone)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1641,8 +1826,9 @@
         {
           "flags": "--engine <name>",
           "description": "coding engine: opencode, opencode2, crush, or omp (MANDATORY)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1692,36 +1878,41 @@
         {
           "flags": "-g, --global",
           "description": "install into the agent global config (default)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-l, --local",
           "description": "install into <cwd>/.mcp.json (claude only)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-t, --target <agent>",
           "description": "target agent (claude | codex | both); omit for an interactive prompt",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--command <cmd>",
           "description": "override the executable name (default: triss)",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "--args <args>",
           "description": "override args, space-separated (default: 'mcp serve')",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1734,22 +1925,25 @@
         {
           "flags": "-g, --global",
           "description": "remove from the agent global config (default)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-l, --local",
           "description": "remove from <cwd>/.mcp.json (claude only)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-t, --target <agent>",
           "description": "target agent (claude | codex | both); omit for an interactive prompt",
-          "required": true,
-          "hasValue": true,
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
           "defaultValue": null
         }
       ]
@@ -1762,22 +1956,2328 @@
         {
           "flags": "-g, --global",
           "description": "(default) check the agent global config",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-l, --local",
           "description": "check <cwd>/.mcp.json (claude only)",
-          "required": false,
-          "hasValue": false,
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         },
         {
           "flags": "-t, --target <agent>",
           "description": "target agent (claude | codex | both). Default: both",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "confluence",
+      "description": "Atlassian Confluence (REST v2) — search, read, create, update pages",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "confluence search",
+      "description": "CQL search; --question summarizes the result list",
+      "args": [
+        {
+          "name": "<cql>",
           "required": true,
-          "hasValue": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-l, --limit <n>",
+          "description": "max results",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": "25"
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "confluence page",
+      "description": "Read a page by id; ADF body is converted to plain text",
+      "args": [
+        {
+          "name": "<id>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "confluence create",
+      "description": "Create a new page",
+      "args": [],
+      "options": [
+        {
+          "flags": "--space <key|id>",
+          "description": "space key (e.g. ENG) or numeric space id",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--title <text>",
+          "description": "page title",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--body <text>",
+          "description": "plain-text body (paragraphs split on blank lines)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--parent <id>",
+          "description": "parent page id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "confluence update",
+      "description": "Update a page (title and/or body). Bumps the version automatically.",
+      "args": [
+        {
+          "name": "<id>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--title <text>",
+          "description": "",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--body <text>",
+          "description": "",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "confluence spaces",
+      "description": "List spaces (id, key, name)",
+      "args": [],
+      "options": [
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "github",
+      "description": "GitHub Issues — search, read, create, update, comment",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "github search",
+      "description": "GitHub Issues search via /search/issues; --question summarizes the list",
+      "args": [
+        {
+          "name": "<query>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-l, --limit <n>",
+          "description": "max results",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": "30"
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "github issue",
+      "description": "Read an issue (repo auto-detected from git origin if omitted)",
+      "args": [
+        {
+          "name": "<number>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--repo <owner/name>",
+          "description": "override repo (default: detect from origin)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--with-comments",
+          "description": "include the comment thread",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "github create",
+      "description": "Create a new issue",
+      "args": [],
+      "options": [
+        {
+          "flags": "--repo <owner/name>",
+          "description": "target repo (default: detect from origin)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--title <text>",
+          "description": "issue title",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--body <text>",
+          "description": "issue body (markdown)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--labels <list>",
+          "description": "comma-separated label names",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--assignees <list>",
+          "description": "comma-separated GitHub logins",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "print created issue as JSON",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "github update",
+      "description": "Update title, body, state, labels, or assignees",
+      "args": [
+        {
+          "name": "<number>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--repo <owner/name>",
+          "description": "override repo",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--title <text>",
+          "description": "",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--body <text>",
+          "description": "",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--state <open|closed>",
+          "description": "",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--labels <list>",
+          "description": "comma-separated label names (replaces existing)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--assignees <list>",
+          "description": "comma-separated logins (replaces existing)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "github comment",
+      "description": "List comments (with --question summarize) or post one with --post",
+      "args": [
+        {
+          "name": "<number>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--repo <owner/name>",
+          "description": "override repo",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--post <text>",
+          "description": "post a new comment",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "gitlab",
+      "description": "GitLab Issues (REST v4) — search, read, create, update, comment",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "gitlab search",
+      "description": "Search issues; --project narrows to one project",
+      "args": [
+        {
+          "name": "<text>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--project <namespace/name>",
+          "description": "project path (auto-detected from origin)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--scope <scope>",
+          "description": "search scope (default: all)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-l, --limit <n>",
+          "description": "max results",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": "30"
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "gitlab issue",
+      "description": "Read an issue by IID (project auto-detected from origin)",
+      "args": [
+        {
+          "name": "<iid>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--project <namespace/name>",
+          "description": "override project",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--with-comments",
+          "description": "include notes (comments)",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "gitlab create",
+      "description": "Create a new issue",
+      "args": [],
+      "options": [
+        {
+          "flags": "--project <namespace/name>",
+          "description": "target project (auto-detected if omitted)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--title <text>",
+          "description": "issue title",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--body <text>",
+          "description": "issue description (markdown)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--labels <list>",
+          "description": "comma-separated labels",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "print created issue as JSON",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "gitlab update",
+      "description": "Update title/body/state/labels",
+      "args": [
+        {
+          "name": "<iid>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--project <namespace/name>",
+          "description": "",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--title <text>",
+          "description": "",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--body <text>",
+          "description": "",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--state <open|closed>",
+          "description": "",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--labels <list>",
+          "description": "comma-separated labels (replaces existing)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "gitlab comment",
+      "description": "List notes (with --question summarize) or post one with --post",
+      "args": [
+        {
+          "name": "<iid>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--project <namespace/name>",
+          "description": "",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--post <text>",
+          "description": "post a new note",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "jira",
+      "description": "Atlassian Jira (REST v3) — search, read, create, update, comment, transition",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "jira search",
+      "description": "Run a JQL search; pass --question to summarize",
+      "args": [
+        {
+          "name": "<jql>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-l, --limit <n>",
+          "description": "max results",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": "50"
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize the result list",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "jira issue",
+      "description": "Read an issue; pass --question to summarize instead of dumping",
+      "args": [
+        {
+          "name": "<key>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--with-comments",
+          "description": "also fetch all comments",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "jira update",
+      "description": "Update fields, transition status, or link to a parent/epic",
+      "args": [
+        {
+          "name": "<key>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--summary <text>",
+          "description": "new summary",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--description <text>",
+          "description": "new description (plain text — converted to ADF)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--assignee <accountId>",
+          "description": "reassign by accountId",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--priority <name>",
+          "description": "set priority by name",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--status <name>",
+          "description": "transition to a state by name",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--parent <key>",
+          "description": "link to a parent/epic; auto-detects parent vs Epic Link customfield",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "jira create",
+      "description": "Create a new issue; optionally link to a parent/epic with --parent",
+      "args": [],
+      "options": [
+        {
+          "flags": "--project <key>",
+          "description": "project key (e.g. TRISS)",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--summary <text>",
+          "description": "issue summary/title",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--type <name>",
+          "description": "issue type",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": "Task"
+        },
+        {
+          "flags": "--description <text>",
+          "description": "plain-text description (converted to ADF)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--parent <key>",
+          "description": "parent/epic key — auto-detected method",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "print created issue as JSON",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "jira comments",
+      "description": "List comments (with --question summarize) or post one with --post",
+      "args": [
+        {
+          "name": "<key>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--post <text>",
+          "description": "post a new comment",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "jira transitions",
+      "description": "List available status transitions, or apply one with --apply",
+      "args": [
+        {
+          "name": "<key>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--apply <name>",
+          "description": "transition matching this name (or its target)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "jira attachments",
+      "description": "List attachments on an issue",
+      "args": [
+        {
+          "name": "<key>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "jira whoami",
+      "description": "Show the authenticated account (accountId is what --assignee expects)",
+      "args": [],
+      "options": [
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear",
+      "description": "Linear (GraphQL) — search, read, create, update, comment, transition",
+      "args": [],
+      "options": []
+    },
+    {
+      "path": "linear search",
+      "description": "Full-text search; pass --question to summarize the result list",
+      "args": [
+        {
+          "name": "<term>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-l, --limit <n>",
+          "description": "max results",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": "50"
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear issue",
+      "description": "Read an issue by identifier (TEAM-42) or UUID",
+      "args": [
+        {
+          "name": "<id>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--with-comments",
+          "description": "include comments in the summary corpus",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear update",
+      "description": "Update an issue, link to project/parent, or transition state",
+      "args": [
+        {
+          "name": "<id>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--title <text>",
+          "description": "new title",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--description <text>",
+          "description": "new description (markdown supported)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--priority <n>",
+          "description": "priority 0-4",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--project <id>",
+          "description": "attach to a project (UUID)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--parent <id>",
+          "description": "set parent issue (sub-issue) by UUID or identifier",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--state <name>",
+          "description": "transition to a workflow state by name",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--due-date <date>",
+          "description": "due date YYYY-MM-DD (TimelessDate)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--milestone <id>",
+          "description": "project milestone UUID",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--assignee <ref>",
+          "description": "assignee UUID, email, or display name",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--labels <list>",
+          "description": "comma-separated label names or UUIDs (replaces existing; pass \"\" to clear)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--team <id>",
+          "description": "team key or UUID — only required to resolve label names from a different team",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear create",
+      "description": "Create a new issue; --project links to a Project, --parent makes it a sub-issue",
+      "args": [],
+      "options": [
+        {
+          "flags": "--team <id>",
+          "description": "team UUID or key",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--title <text>",
+          "description": "issue title",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--description <text>",
+          "description": "issue description (markdown)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--project <id>",
+          "description": "attach to a Project (UUID)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--parent <id>",
+          "description": "parent issue (UUID or identifier) for sub-issues",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--priority <n>",
+          "description": "priority 0-4",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--assignee <ref>",
+          "description": "assignee UUID, email, or display name",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--due-date <date>",
+          "description": "due date YYYY-MM-DD (TimelessDate)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--milestone <id>",
+          "description": "project milestone UUID",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--labels <list>",
+          "description": "comma-separated label names or UUIDs",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "print created issue as JSON",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear comments",
+      "description": "List comments (with --question summarize) or post one with --post",
+      "args": [
+        {
+          "name": "<id>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--post <text>",
+          "description": "post a new comment (markdown)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-q, --question <text>",
+          "description": "summarize through the configured provider runtime",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--provider <id>",
+          "description": "canonical provider id",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-m, --model <id>",
+          "description": "<canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--engine <id>",
+          "description": "execution engine (direct, opencode, opencode2, omp, or crush)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--protect-credentials",
+          "description": "Use the parent-owned credential proxy for the model projection.\nA selected protected route fails closed — before any credential-bearing\nspawn — when the raw key cannot be contained or the proxy cannot start;\nthere is no automatic downgrade to raw.",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--no-protect-credentials",
+          "description": "override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "-e, --effort <level>",
+          "description": "reasoning effort: low, medium, high, xhigh, or max",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear states",
+      "description": "List a team's workflow states; with --apply transition the issue named by --issue",
+      "args": [
+        {
+          "name": "<team>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--apply <name>",
+          "description": "transition --issue to this state",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--issue <id>",
+          "description": "issue identifier or UUID (used with --apply)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear attachments",
+      "description": "List attachments on an issue",
+      "args": [
+        {
+          "name": "<id>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear project-list",
+      "description": "List projects for a team (id, name, startDate, targetDate)",
+      "args": [
+        {
+          "name": "<team>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear project-create",
+      "description": "Create a Linear project; --initiative links to an initiative UUID",
+      "args": [],
+      "options": [
+        {
+          "flags": "--team <id>",
+          "description": "team UUID or key",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--name <text>",
+          "description": "project name",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--start-date <date>",
+          "description": "start date ISO 8601 (YYYY-MM-DD)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--target-date <date>",
+          "description": "target date ISO 8601 (YYYY-MM-DD)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--initiative <id>",
+          "description": "initiative UUID to attach this project to",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "print created project as JSON",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear initiative-list",
+      "description": "List all initiatives with their linked projects",
+      "args": [],
+      "options": [
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear milestone-list",
+      "description": "List milestones for a project (id, name, targetDate)",
+      "args": [
+        {
+          "name": "<project>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear milestone-create",
+      "description": "Create a milestone inside a project (a Gantt diamond)",
+      "args": [],
+      "options": [
+        {
+          "flags": "--project <id>",
+          "description": "project UUID",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--name <text>",
+          "description": "milestone name",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--target-date <date>",
+          "description": "target date YYYY-MM-DD",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--description <text>",
+          "description": "milestone description",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "print created milestone as JSON",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear label-list",
+      "description": "List a team's labels (id, name, color)",
+      "args": [
+        {
+          "name": "<team>",
+          "required": true,
+          "variadic": false,
+          "description": ""
+        }
+      ],
+      "options": [
+        {
+          "flags": "--json",
+          "description": "raw JSON output",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
+          "defaultValue": null
+        }
+      ]
+    },
+    {
+      "path": "linear bulk-update",
+      "description": "Apply the same field changes to many issues in one call",
+      "args": [],
+      "options": [
+        {
+          "flags": "--ids <list>",
+          "description": "comma- or space-separated issue identifiers/UUIDs",
+          "mandatory": true,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--project <id>",
+          "description": "attach to a project (UUID)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--parent <id>",
+          "description": "set parent issue (UUID or identifier)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--priority <n>",
+          "description": "priority 0-4",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--due-date <date>",
+          "description": "due date YYYY-MM-DD (TimelessDate)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--milestone <id>",
+          "description": "project milestone UUID",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--assignee <ref>",
+          "description": "assignee UUID, email, or display name",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--labels <list>",
+          "description": "comma-separated label names or UUIDs (pass \"\" to clear)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--team <id>",
+          "description": "team key or UUID — only required to resolve label names",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--concurrency <n>",
+          "description": "parallel updates (default 5)",
+          "mandatory": false,
+          "valueRequired": true,
+          "variadic": false,
+          "defaultValue": null
+        },
+        {
+          "flags": "--json",
+          "description": "print per-issue results as JSON",
+          "mandatory": false,
+          "valueRequired": false,
+          "variadic": false,
           "defaultValue": null
         }
       ]

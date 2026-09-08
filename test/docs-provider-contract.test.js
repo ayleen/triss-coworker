@@ -19,6 +19,8 @@ import { resolveModelSelection } from '../src/model-selection.js';
 import { resolveProvider } from '../src/usage.js';
 import { CODER_ENGINE_REGISTRY, CODER_ENGINE_ORDER } from '../src/coder-engine-registry.js';
 import { CANONICAL_PROVIDER_IDS } from '../src/provider-contract.js';
+import { assembleTools } from '../src/mcp/tools.js';
+import { readFileSync as fsReadFileSync } from 'node:fs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -90,6 +92,29 @@ test('DOC-ENGINE-01: every engine accepts a subset of the canonical providers an
     [...CANONICAL_PROVIDER_IDS],
     'crush providerKinds drifted from provider-neutral reality',
   );
+});
+
+test('DOC-MCP-01: the documented core and coder tool lists match the runtime inventory', () => {
+  const mcpDoc = fsReadFileSync(join(ROOT, 'docs', 'mcp.md'), 'utf8');
+
+  const extractList = (heading) => {
+    const section = mcpDoc.slice(mcpDoc.indexOf(heading));
+    const rest = section.slice(section.indexOf('\n', section.indexOf('##') === 0 ? 0 : 0) + 1);
+    const next = rest.indexOf('\n## ');
+    const body = next === -1 ? rest : rest.slice(0, next);
+    return [...body.matchAll(/^- `(triss_[a-z_]+)`/gm)].map((match) => match[1]);
+  };
+
+  const documentedCore = extractList('## Core tools');
+  const documentedCoder = extractList('## Coder tools');
+
+  const runtimeCore = assembleTools({ readyIntegrations: [], coderReady: false }).map((tool) => tool.name);
+  const runtimeCoder = assembleTools({ readyIntegrations: [], coderReady: true })
+    .map((tool) => tool.name)
+    .filter((name) => !runtimeCore.includes(name));
+
+  assert.deepEqual([...documentedCore].sort(), [...runtimeCore].sort());
+  assert.deepEqual([...documentedCoder].sort(), [...runtimeCoder].sort());
 });
 
 test('DOC-PROVIDER-02: legacy endpoint variables stay out of current user-facing docs', () => {

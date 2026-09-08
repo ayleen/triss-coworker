@@ -4,22 +4,27 @@
 // Copyright (c) 2026 ayleen
 
 // Check that documented `triss` examples reference commands and flags that
-// actually exist in the executable CLI tree. This is a parse-level contract
-// check: nothing is executed, no network, no engine spawns. It catches the
-// class of drift where docs recommend a removed flag (e.g. `coder run
-// --small-model`) or a non-existent command (e.g. `coder status`).
+// actually exist in the executable CLI tree, use mandatory options, respect
+// option value arity, and stay inside the registered command path. This is
+// a parse-level contract check: nothing is executed, no network, no engine
+// spawns, and no credential bootstrap — integration manifests load with
+// bootstrap: false, so inventorying never spawns `gh auth token` or similar.
 //
 // Scope: current user-facing documentation only. Historical and design docs
 // (docs/adr, docs/plans, docs/postmortems, docs/website, *-plan.md,
 // deprecations.md, CHANGELOG) are deliberately out of scope.
 //
-// A fence can be excluded with an HTML comment `<!-- doc-examples-skip -->`
-// on its own line before the fence.
+// Fence directives (an HTML comment on the line immediately before a fence):
+//   <!-- doc-examples-skip -->                     — skip this fence entirely
+//   <!-- doc-examples-legend path="coder run" -->  — option-legend fence:
+//     every line starting with "--flag" is validated against the named
+//     command; `triss ...` lines inside it are validated normally.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildProgram } from '../src/cli-program.js';
+import { loadIntegrations } from '../src/integrations/_registry.js';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -27,8 +32,6 @@ const DOC_SOURCES = [
   'README.md',
   'SECURITY.md',
   'docs',
-  ['docs/engines'],
-  ['docs/integrations'],
   'templates',
 ];
 
@@ -41,12 +44,20 @@ const SKIP_FILE_PATTERN = /(?:^|[-.])plan\.md$/;
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'adr', 'plans', 'postmortems', 'website', 'generated']);
 
-function collectDocFiles() {
+// Only explicitly shell-labeled fences are runnable. An unlabeled fence is
+// usually an output sample or an ASCII diagram, not a command to copy.
+const RUNNABLE_FENCE_LANGS = new Set(['bash', 'sh', 'shell', 'zsh', 'console', 'terminal']);
+
+export function collectDocFiles(root = REPO_ROOT) {
   const files = [];
   for (const entry of DOC_SOURCES) {
-    const [relPath, onlyDirChildren] = Array.isArray(entry) ? entry : [entry, null];
-    const abs = join(REPO_ROOT, relPath);
-    const stat = statSync(abs);
+    const abs = join(root, entry);
+    let stat;
+    try {
+      stat = statSync(abs);
+    } catch {
+      continue;
+    }
     if (stat.isFile()) {
       files.push(abs);
       continue;
@@ -60,47 +71,76 @@ function collectDocFiles() {
       }
     };
     scan(abs);
-    if (onlyDirChildren !== null) {
-      // array form was [dir] — nothing extra
-    }
   }
   return [...new Set(files)].filter((file) => {
-    const rel = relative(REPO_ROOT, file);
+    const rel = relative(root, file);
     return !SKIP_FILES.has(rel) && !SKIP_FILE_PATTERN.test(rel);
   });
 }
 
 // --- CLI facts ------------------------------------------------------------
 
-export function collectCliFacts() {
-  const program = buildProgram({ integrations: [] });
-  const commands = new Map(); // "ask" | "coder run" -> { options:Set, subcommands:Set, hasAction }
-  const walk = (command, prefix) => {
-    const path = [...prefix, command.name()].filter(Boolean);
+function optionFlagTokens(opt) {
+  const tokens = new Set();
+  for (const piece of opt.flags.split(/[ ,]+/)) {
+    if (piece.startsWith('-')) tokens.add(piece);
+  }
+  return tokens;
+}
+
+function optionTakesValue(opt) {
+  return /<|\[/.test(opt.flags);
+}
+
+function optionVariadic(opt) {
+  return opt.variadic === true || /\.\.\./.test(opt.flags);
+}
+
+// The authoritative declarative shape of the executable CLI: the same
+// registration bin/triss.js performs, plus every integration manifest loaded
+// WITHOUT bootstrap side effects. Async because manifest discovery reads the
+// integrations directory; callers await it (the CLI main, the reference
+// generator, and the contract tests).
+export async function collectCliFacts({ root = REPO_ROOT } = {}) {
+  // A tree without integrations still validates its core commands.
+  let integrations;
+  try {
+    integrations = await loadIntegrations({
+      dir: join(root, 'src', 'integrations'),
+      bootstrap: false,
+    });
+  } catch {
+    integrations = [];
+  }
+  const program = buildProgram({ integrations });
+  const commands = new Map(); // "coder run" -> { options, subcommands, args }
+
+  const addCommand = (command, path) => {
     const key = path.join(' ');
-    const optionNames = new Set();
+    const options = new Map(); // "--paths" -> metadata
     for (const opt of command.options) {
-      for (const token of opt.flags.split(/[ ,|]+/)) {
-        if (token.startsWith('--') || token.startsWith('-')) optionNames.add(token.replace(/[<[].*$/, ''));
-      }
-      if (opt.negate) optionNames.add(`--no-${opt.name()}`);
+      const meta = {
+        tokens: optionFlagTokens(opt),
+        takesValue: optionTakesValue(opt),
+        variadic: optionVariadic(opt),
+        mandatory: opt.mandatory === true,
+        name: opt.name(),
+      };
+      for (const token of meta.tokens) options.set(token, meta);
     }
-    commands.set(key, { options: optionNames, subcommands: new Set(), args: command.registeredArguments });
+    const args = command.registeredArguments.map((arg) => ({
+      name: arg._name || '',
+      required: arg.required === true,
+      variadic: arg.variadic === true,
+    }));
+    commands.set(key, { options, subcommands: new Set(), args, description: command.description() || '' });
     for (const sub of command.commands) {
       commands.get(key).subcommands.add(sub.name());
+      addCommand(sub, [...path, sub.name()]);
     }
-    for (const sub of command.commands) walk(sub, path);
   };
-  // The root node is named "triss"; its children are top-level commands.
-  const root = program;
-  const optionNames = new Set();
-  for (const opt of root.options) {
-    for (const token of opt.flags.split(/[ ,|]+/)) {
-      if (token.startsWith('--') || token.startsWith('-')) optionNames.add(token.replace(/[<[].*$/, ''));
-    }
-  }
-  commands.set('', { options: optionNames, subcommands: new Set(root.commands.map((c) => c.name())), args: [] });
-  for (const sub of root.commands) walk(sub, []);
+
+  addCommand(program, []);
   return commands;
 }
 
@@ -108,46 +148,103 @@ function flagsForPath(facts, pathKey) {
   return facts.get(pathKey) ?? null;
 }
 
-// --- Markdown parsing -----------------------------------------------------
+// --- Shell lexing -----------------------------------------------------------
 
-function extractFencesSimple(text) {
-  const fences = [];
-  let current = null;
-  text.split('\n').forEach((line, index) => {
-    const open = line.match(/^\s*```(\S*)\s*$/);
-    if (open && !current) {
-      current = { info: open[1] || '', lines: [], startLine: index + 1 };
-      return;
-    }
-    if (current && /^\s*```\s*$/.test(line)) {
-      fences.push(current);
-      current = null;
-      return;
-    }
-    if (current) current.lines.push(line);
-  });
-  return fences;
-}
-
-function stripComment(line) {
-  const hash = line.indexOf(' #');
-  return (hash === -1 ? line : line.slice(0, hash)).trim();
-}
-
-function splitShellSegments(line) {
-  return line.split(/\s*(?:&&|\|\||\||;)\s*/).map((segment) => segment.trim()).filter(Boolean);
-}
-
-function tokenize(segment) {
+// Tokenize one shell command segment, honoring single/double quotes and
+// backslash escapes. Returns the tokens plus the un-lexed remainder after
+// the first unquoted separator (&&, ||, |, ;) or unquoted comment (#).
+function lexSegment(text) {
   const tokens = [];
-  const rest = segment.trim();
-  const matches = rest.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g);
-  for (const match of matches) tokens.push(match[1] ?? match[2] ?? match[3]);
+  let current = '';
+  let hasToken = false;
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (inSingle) {
+      if (char === "'") inSingle = false;
+      else current += char;
+      continue;
+    }
+    if (inDouble) {
+      if (char === '\\') {
+        const next = text[i + 1];
+        if (next !== undefined && '$`"\\\n'.includes(next)) {
+          current += next === '\n' ? '' : next;
+          i += 1;
+        } else {
+          current += char;
+        }
+        continue;
+      }
+      if (char === '"') inDouble = false;
+      else current += char;
+      continue;
+    }
+    if (char === "'") {
+      inSingle = true;
+      hasToken = true;
+      continue;
+    }
+    if (char === '"') {
+      inDouble = true;
+      hasToken = true;
+      continue;
+    }
+    if (char === '\\') {
+      const next = text[i + 1];
+      if (next !== undefined) {
+        current += next;
+        hasToken = true;
+        i += 1;
+      }
+      continue;
+    }
+    if (char === ' ' || char === '\t' || char === '\n') {
+      if (hasToken) tokens.push(current);
+      current = '';
+      hasToken = false;
+      continue;
+    }
+    if (char === '#') break; // unquoted comment ends the segment
+    if (char === '&' && text[i + 1] === '&') {
+      if (hasToken) tokens.push(current);
+      return { tokens, rest: text.slice(i + 2) };
+    }
+    if (char === '|' || char === ';') {
+      if (hasToken) tokens.push(current);
+      return { tokens, rest: text.slice(i + 1) };
+    }
+    current += char;
+    hasToken = true;
+  }
+  if (hasToken) tokens.push(current);
+  return { tokens, rest: '' };
+}
+
+// Split one logical line into command segments at shell separators that sit
+// outside quotes. Text inside "..." or '...' never becomes a new command.
+export function splitShellSegments(line) {
+  const segments = [];
+  let rest = line;
+  for (;;) {
+    const { tokens, rest: remainder } = lexSegment(rest);
+    if (tokens.length) segments.push(tokens);
+    if (!remainder) break;
+    rest = remainder;
+  }
+  return segments;
+}
+
+// Strip a leading interactive prompt ($, %, >) from a console segment
+// without touching `$` inside values.
+export function stripPrompt(tokens) {
+  if (tokens.length === 0) return tokens;
+  if (tokens[0] === '$' || tokens[0] === '%' || tokens[0] === '>') return tokens.slice(1);
   return tokens;
 }
 
-function trissInvocation(tokens) {
-  // Env-prefixed invocations, node bin/triss.js, and plain `triss`.
+export function trissInvocationTokens(tokens) {
   let index = 0;
   while (index < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index])) index += 1;
   const rest = tokens.slice(index);
@@ -155,172 +252,285 @@ function trissInvocation(tokens) {
   if (rest[0] === 'node' && rest.some((token) => token.endsWith('bin/triss.js'))) {
     const binIndex = rest.findIndex((token) => token.endsWith('bin/triss.js'));
     const args = rest.slice(binIndex + 1);
-    // `node bin/triss.js` with a shebang runner may pass CLI options to node
-    // itself; skip tokens until the first non-dash token.
-    while (args.length && args[0].startsWith('-')) args.shift();
+    while (args.length && args[0].startsWith('-') && args[0] !== '-') args.shift();
     return args;
   }
   if (rest[0] !== 'triss') return null;
   return rest.slice(1);
 }
 
-export function parseDocInvocations(text) {
-  const invocations = [];
-  const legends = [];
-  for (const fence of extractFencesSimple(text)) {
-    if (/^\s*<!--\s*doc-examples-skip\s*-->\s*$/.test((fence.lines[0] ?? '')) ||
-        fence.skipped) {
-      continue;
+// --- Fence scanning ---------------------------------------------------------
+
+// Scan a document into runnable fences with provenance: backtick and tilde
+// fences with a runnable language (or none), honoring an explicit
+// <!-- doc-examples-skip --> directive on the immediately preceding
+// non-empty line.
+export function extractRunnableFences(text) {
+  const lines = text.split('\n');
+  const fences = [];
+  let current = null;
+  let lastNonEmpty = '';
+  lines.forEach((line, index) => {
+    const open = line.match(/^\s{0,3}(`{3,}|~{3,})\s*(\S*)\s*$/);
+    if (open && !current) {
+      const marker = open[1];
+      const info = open[2] || '';
+      current = {
+        openMarker: marker,
+        info,
+        runnable: RUNNABLE_FENCE_LANGS.has(info.toLowerCase()),
+        skipped: /^\s*<!--\s*doc-examples-skip\s*-->\s*$/.test(lastNonEmpty),
+        legendPath: (lastNonEmpty.match(/^\s*<!--\s*doc-examples-legend\s+path="([^"]+)"\s*-->\s*$/) || [])[1] ?? null,
+        startLine: index + 1,
+        lines: [],
+      };
+      lastNonEmpty = '';
+      return;
     }
-    let lastCommand = null; // { path, lineOffset }
-    let lastCommandDistance = Infinity;
-    fence.lines.forEach((raw, offset) => {
-      const line = stripComment(raw);
-      if (!line) return;
-      const legend = line.match(/^--([A-Za-z][A-Za-z0-9-]*)/);
-      if (legend && lastCommand && lastCommandDistance <= 3) {
-        legends.push({ flags: [line.split(/\s+/)[0].replace(/^\[|\]$|=.*$/g, '')], path: lastCommand.path, fenceStart: fence.startLine + offset });
-        return;
+    if (current) {
+      const close = line.trim().match(/^(`{3,}|~{3,})$/);
+      if (close && close[1][0] === current.openMarker[0] && close[1].length >= current.openMarker.length) {
+        fences.push(current);
+        current = null;
+        lastNonEmpty = '';
+      } else {
+        current.lines.push(line);
       }
-      for (const segment of splitShellSegments(line)) {
-        const tokens = tokenize(segment);
-        const args = trissInvocation(tokens);
-        if (args) {
-          const pathTokens = [];
-          let i = 0;
-          while (i < args.length && !args[i].startsWith('-')) {
-            pathTokens.push(args[i]);
-            i += 1;
-          }
-          invocations.push({ pathTokens, args, fenceStart: fence.startLine + offset, lineOffset: offset });
-          lastCommand = { path: pathTokens.join(' '), lineOffset: offset };
-          lastCommandDistance = 0;
-          continue;
-        }
-        // A positional token resets "nearest command" proximity so legend
-        // flags are not validated against an unrelated earlier command.
-        lastCommandDistance += 1;
-      }
-    });
-  }
-  return { invocations, legends };
+      return;
+    }
+    if (line.trim()) lastNonEmpty = line;
+  });
+  if (current) fences.push(current); // unterminated fence: still inspect
+  return fences.filter((fence) => fence.runnable && !fence.skipped);
 }
 
-// Integration commands (jira, linear, ...) are registered dynamically from
-// manifests whose registration may bootstrap credential child processes, so
-// the side-effect-free builder does not include them. Their command names are
-// still part of the public contract; their flags are validated by the
-// integration docs' own examples rather than here.
+// Join physical lines into logical shell lines, honoring an unquoted
+// trailing backslash. Returns [{ text, startLine }].
+export function joinContinuations(rawLines, startLine) {
+  const logical = [];
+  let pending = null;
+  let pendingStart = 0;
+  rawLines.forEach((raw, offset) => {
+    const line = pending === null ? raw : `${pending}\n${raw}`;
+    let inSingle = false;
+    let inDouble = false;
+    let continues = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i];
+      if (inSingle) {
+        if (char === "'") inSingle = false;
+        continue;
+      }
+      if (inDouble) {
+        if (char === '\\') i += 1;
+        else if (char === '"') inDouble = false;
+        continue;
+      }
+      if (char === "'") inSingle = true;
+      else if (char === '"') inDouble = true;
+      else if (char === '\\') {
+        const next = line[i + 1];
+        if (next === undefined || next === '\n') {
+          continues = true;
+          break;
+        }
+        i += 1;
+      }
+    }
+    if (continues) {
+      if (pending === null) pendingStart = startLine + offset;
+      pending = line.slice(0, -1);
+      return;
+    }
+    logical.push({ text: line, startLine: pending === null ? startLine + offset : pendingStart });
+    pending = null;
+  });
+  if (pending !== null) logical.push({ text: pending, startLine: pendingStart });
+  return logical;
+}
+
+// --- Validation ------------------------------------------------------------
+
 export const INTEGRATION_COMMAND_NAMES = new Set(['jira', 'linear', 'github', 'gitlab', 'confluence']);
+const UNIVERSAL_OPTIONS = new Set(['--help', '-h', '--version', '-V']);
 
-const UNIVERSAL_OPTIONS = new Set(['--help', '-h']);
-
-export function checkInvocation(facts, { pathTokens, args }) {
+// Validate one triss invocation (tokens after the `triss` literal) against
+// the registered CLI tree: command path, option names, value arity, and
+// mandatory option presence.
+export function checkInvocation(facts, tokens) {
   const errors = [];
-  let pathKey = '';
+  let key = '';
   let i = 0;
-  let placeholder = false;
-  let integration = false;
-  while (i < pathTokens.length) {
-    const token = pathTokens[i];
-    if (token === '<command>') {
-      // Documented placeholder for "any tracker/integration command".
-      placeholder = true;
-      i = pathTokens.length;
-      break;
-    }
-    if (INTEGRATION_COMMAND_NAMES.has(token)) {
-      integration = true;
-      i = pathTokens.length;
-      break;
-    }
-    const candidate = pathKey ? `${pathKey} ${token}` : token;
-    const entry = flagsForPath(facts, candidate);
-    if (!entry) {
-      // Not a subcommand: treat the rest as positionals of the current command.
-      break;
-    }
-    pathKey = candidate;
+
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token.startsWith('-')) break;
+    if (token === '<command>') return errors; // documented integration placeholder
+    const candidate = key ? `${key} ${token}` : token;
+    if (!flagsForPath(facts, candidate)) break;
+    key = candidate;
     i += 1;
   }
-  if (!placeholder && !integration && pathTokens.length > 0 && !flagsForPath(facts, pathKey)) {
-    errors.push(`unknown command \`triss ${pathTokens.join(' ')}\``);
+
+  const command = flagsForPath(facts, key);
+  if (!command) {
+    errors.push(`unknown command \`triss ${tokens.slice(0, i + 1).join(' ')}\``);
     return errors;
   }
-  if (placeholder || integration) return errors;
-  const command = flagsForPath(facts, pathKey);
-  const acceptsPositionals = command.args.length > 0 || command.subcommands.size === 0;
-  while (i < args.length) {
-    const token = args[i];
-    if (token.startsWith('--')) {
-      const name = token.split('=')[0].replace(/^\[|\]$/g, '');
-      if (!command.options.has(name) && !UNIVERSAL_OPTIONS.has(name)) {
-        errors.push(`unknown option \`${name}\` for \`triss ${pathKey || '<command>'}\``.replace('`triss `', '`triss`'));
-      }
-      i += 1;
-      continue;
-    }
-    if (token.startsWith('-') && token.length > 1 && token !== '-') {
+
+  const seenOptions = new Set();
+  let positionalCount = 0;
+  const variadicPositional = command.args.some((arg) => arg.variadic);
+  const maxPositionals = variadicPositional ? Number.POSITIVE_INFINITY : command.args.length;
+
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token.startsWith('--') && token.length > 2) {
       const name = token.split('=')[0];
-      if (!command.options.has(name) && !UNIVERSAL_OPTIONS.has(name)) {
-        errors.push(`unknown option \`${name}\` for \`triss ${pathKey}\``);
+      const meta = command.options.get(name);
+      if (!meta) {
+        if (!UNIVERSAL_OPTIONS.has(name)) {
+          errors.push(`unknown option \`${name}\` for \`triss ${key}\``);
+        }
+        i += 1;
+        continue;
+      }
+      seenOptions.add(meta.name);
+      if (token.includes('=') || !meta.takesValue) {
+        i += 1;
+        continue;
+      }
+      i += 1;
+      if (meta.variadic) {
+        while (i < tokens.length && !tokens[i].startsWith('-')) i += 1;
+      } else if (i >= tokens.length) {
+        errors.push(`option \`${name}\` for \`triss ${key}\` requires a value`);
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+    if (token.startsWith('-') && token.length > 1) {
+      const name = token.split('=')[0];
+      const meta = command.options.get(name);
+      if (!meta) {
+        if (!UNIVERSAL_OPTIONS.has(name)) {
+          errors.push(`unknown option \`${name}\` for \`triss ${key}\``);
+        }
+        i += 1;
+        continue;
+      }
+      seenOptions.add(meta.name);
+      if (token.includes('=') || !meta.takesValue) {
+        i += 1;
+        continue;
+      }
+      i += 1;
+      if (i >= tokens.length) errors.push(`option \`${name}\` for \`triss ${key}\` requires a value`);
+      else i += 1;
+      continue;
+    }
+    // Documented synopsis convention: a bracketed flag token like `--all`
+    // in `[--all]` denotes an optional flag, not a positional argument.
+    const synopsisFlag = token.match(/^\[(--[^\]]+)\]$/);
+    if (synopsisFlag) {
+      const meta = command.options.get(synopsisFlag[1]);
+      if (!meta && !UNIVERSAL_OPTIONS.has(synopsisFlag[1])) {
+        errors.push(`unknown option \`${synopsisFlag[1]}\` for \`triss ${key}\``);
+      }
+      if (meta) seenOptions.add(meta.name);
+      i += 1;
+      continue;
+    }
+    if (positionalCount >= maxPositionals) {
+      if (command.subcommands.size > 0) {
+        errors.push(
+          `unknown argument \`${token}\` for \`triss ${key}\` — \`triss ${key} ${token}\` is not a registered command path`,
+        );
+      } else {
+        errors.push(`unexpected argument \`${token}\` for \`triss ${key}\``);
       }
       i += 1;
       continue;
     }
-    if (!acceptsPositionals) {
-      errors.push(
-        `unknown argument \`${token}\` for \`triss ${pathKey}\` — \`triss ${pathKey} ${token}\` is not a registered command path`,
-      );
-      i += 1;
-      continue;
-    }
+    positionalCount += 1;
     i += 1;
   }
+
+  for (const opt of command.options.values()) {
+    if (!opt.mandatory || seenOptions.has(opt.name)) continue;
+    const longToken = [...opt.tokens].find((token) => token.startsWith('--')) ?? [...opt.tokens][0];
+    errors.push(`\`triss ${key}\` requires the mandatory option \`${longToken}\``);
+  }
+
   return errors;
 }
 
-export function checkDocument(facts, text) {
-  const failures = [];
-  const { invocations, legends } = parseDocInvocations(text);
-  for (const invocation of invocations) {
-    for (const error of checkInvocation(facts, invocation)) {
-      failures.push(`line ~${invocation.fenceStart}: ${error}`);
-    }
-  }
-  for (const legend of legends) {
-    const command = flagsForPath(facts, legend.path);
-    if (!command) continue; // command validity is reported by invocations
-    for (const flag of legend.flags) {
-      if (!command.options.has(flag)) {
-        failures.push(`line ~${legend.fenceStart}: unknown documented option \`${flag}\` for \`triss ${legend.path}\``);
+// Validate every runnable example in a Markdown document. Returns
+// [{ startLine, message }].
+export function validateRunnableExamples(facts, text) {
+  const findings = [];
+  for (const fence of extractRunnableFences(text)) {
+    // +1: fence.startLine is the ``` open line; content starts one later.
+    for (const line of joinContinuations(fence.lines, fence.startLine + 1)) {
+      for (const tokens of splitShellSegments(line.text)) {
+        const prompted = stripPrompt(tokens);
+        const args = trissInvocationTokens(prompted);
+        if (args) {
+          for (const message of checkInvocation(facts, args)) {
+            findings.push({ startLine: line.startLine, message });
+          }
+          continue;
+        }
+        if (fence.legendPath) {
+          const command = flagsForPath(facts, fence.legendPath);
+          if (!command) continue; // command validity is reported by invocations
+          const first = prompted[0];
+          if (first && first.startsWith('--')) {
+            const name = first.split('=')[0].replace(/^\[|\]$/g, '');
+            if (!command.options.has(name) && !UNIVERSAL_OPTIONS.has(name)) {
+              findings.push({
+                startLine: line.startLine,
+                message: `unknown documented option \`${name}\` for \`triss ${fence.legendPath}\``,
+              });
+            }
+          }
+        }
       }
     }
   }
-  return failures;
+  return findings;
 }
 
-export function checkRepositoryDocs() {
-  const facts = collectCliFacts();
+export function checkDocument(facts, text) {
+  return validateRunnableExamples(facts, text);
+}
+
+export async function checkRepositoryDocs({ root = REPO_ROOT } = {}) {
+  const facts = await collectCliFacts({ root });
   const failures = [];
   let fileCount = 0;
-  for (const file of collectDocFiles()) {
+  for (const file of collectDocFiles(root)) {
     fileCount += 1;
     const text = readFileSync(file, 'utf8');
-    for (const failure of checkDocument(facts, text)) {
-      failures.push(`${relative(REPO_ROOT, file)}:${failure}`);
+    for (const finding of validateRunnableExamples(facts, text)) {
+      failures.push(`${relative(root, file)}:${finding.startLine}: ${finding.message}`);
     }
   }
   return { failures, fileCount };
 }
 
 function main() {
-  const { failures, fileCount } = checkRepositoryDocs();
-  if (failures.length) {
-    process.stderr.write(`${failures.join('\n')}\n`);
+  checkRepositoryDocs().then(({ failures, fileCount }) => {
+    if (failures.length) {
+      process.stderr.write(`${failures.join('\n')}\n`);
+      process.exit(1);
+    }
+    process.stdout.write(`documented triss examples match the CLI tree across ${fileCount} files\n`);
+  }, (error) => {
+    process.stderr.write(`${error?.stack || error}\n`);
     process.exit(1);
-  }
-  process.stdout.write(`documented triss examples match the CLI tree across ${fileCount} files\n`);
+  });
 }
 
 if (process.argv[1] && relative(process.argv[1], fileURLToPath(import.meta.url)) === '') {

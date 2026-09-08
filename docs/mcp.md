@@ -111,7 +111,16 @@ structured `warnings`. Restart the MCP host after changing persisted defaults.
 - `triss_write` — generate boilerplate from a specification and reference.
 - `triss_commit_msg` — generate a commit message from staged changes.
 - `triss_status` — show provider, migration, engine, and integration readiness.
-- `triss_update` — inspect or apply supported updates.
+
+This list is the always-available inventory; it is checked against the
+runtime tool assembly by contract tests. Updates and migration are managed
+through the CLI: the MCP server can emit passive update notices, but it does
+not expose a `triss_update` or `triss_migrate` tool. Run `triss update` to
+inspect update status and follow the instructions for your installation type
+(package-managed installs update with their package manager; supported
+standalone installs can use `triss update --apply`). Run `triss migrate` when
+configuration migration is required, and restart MCP hosts after updating or
+migrating the installation.
 
 Core tool schemas are always listed. A call that selects an unconfigured provider fails with the exact missing credential field.
 

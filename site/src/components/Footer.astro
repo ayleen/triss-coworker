@@ -7,7 +7,21 @@ import { DOCS_VERSION, SOURCE_COMMIT } from "../data/facts.js";
 <footer style="border-top: 1px solid var(--color-border); margin-top: 80px; padding: 32px var(--layout-gutter);">
   <div style="max-width: var(--layout-max); margin: 0 auto; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--color-text-faint);">
     <span>© Triss — <a href="https://github.com/ayleen/triss-coworker/blob/main/LICENSE">MIT</a> · <a href="https://github.com/ayleen/triss-coworker">GitHub</a> · <a href="https://www.npmjs.com/package/triss-coworker">npm</a> · <a href="https://github.com/ayleen/triss-coworker/releases">Releases</a> · <a href="https://github.com/ayleen/triss-coworker/issues">Issues</a> · <a href="https://github.com/ayleen/triss-coworker/blob/main/CHANGELOG.md">Changelog</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a></span>
-    <span style="font-family: var(--font-mono); font-size: 11px;">docs v{DOCS_VERSION}{SOURCE_COMMIT ? ` · ${SOURCE_COMMIT.slice(0, 12)}` : ""} · <a href="/version.json" title="Build metadata for this site">build metadata</a></span>
+    <span style="font-family: var(--font-mono); font-size: 11px;">docs v{DOCS_VERSION}{SOURCE_COMMIT ? ` · ${SOURCE_COMMIT.slice(0, 12)}` : ""} · <a class="footer-build-link" href="/version.json" title="Build metadata for this site">build metadata</a></span>
     <span style="font-family: var(--font-mono); font-size: 11px;">Not a hosted service — CLI + MCP coworker</span>
   </div>
 </footer>
+
+<style>
+  /* The build-metadata link sits inside a text block, so it needs a
+     non-color affordance in its normal state (WCAG 2.2 link-in-text-block)
+     and a visible keyboard focus indicator. */
+  .footer-build-link {
+    text-decoration: underline;
+    text-underline-offset: 0.18em;
+  }
+  .footer-build-link:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 3px;
+  }
+</style>

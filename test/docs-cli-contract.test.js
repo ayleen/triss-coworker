@@ -21,11 +21,12 @@ import {
   checkRepositoryDocs,
   collectCliFacts,
   checkInvocation,
+  validateRunnableExamples,
 } from '../scripts/check-doc-examples.js';
 import { COMMANDS } from '../site/src/data/commands.js';
 
-test('DOC-CLI-01/02: every documented triss example matches the registered CLI tree', () => {
-  const { failures, fileCount } = checkRepositoryDocs();
+test('DOC-CLI-01/02: every documented triss example matches the registered CLI tree', async () => {
+  const { failures, fileCount } = await checkRepositoryDocs();
   assert.equal(
     failures.length,
     0,
@@ -34,49 +35,143 @@ test('DOC-CLI-01/02: every documented triss example matches the registered CLI t
   assert.ok(fileCount > 20, 'expected the check to cover the user-facing doc set');
 });
 
-test('DOC-CLI-01: the removed `coder status` path is rejected by the checker', () => {
-  const facts = collectCliFacts();
-  const failures = checkInvocation(facts, {
-    pathTokens: ['coder', 'status'],
-    args: ['coder', 'status'],
-  });
+test('DOC-CLI-01: the removed `coder status` path is rejected by the checker', async () => {
+  const facts = await collectCliFacts();
+  const failures = checkInvocation(facts, ['coder', 'status']);
   assert.equal(failures.length, 1, 'coder status must be flagged as a non-existent command path');
+  assert.match(failures[0], /not a registered command path/);
 });
 
-test('DOC-CLI-02: the removed `--small-model` flag is rejected by the checker', () => {
-  const facts = collectCliFacts();
-  const failures = checkInvocation(facts, {
-    pathTokens: ['coder', 'run'],
-    args: ['coder', 'run', '--small-model', 'a/b'],
-  });
-  assert.deepEqual(
-    failures.map((line) => line.includes('--small-model')),
-    [true],
+test('DOC-CLI-02: the removed `--small-model` flag is rejected by the checker', async () => {
+  const facts = await collectCliFacts();
+  const failures = checkInvocation(facts, ['coder', 'run', '--small-model', 'a/b']);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /--small-model/);
+});
+
+// R03 regression fixtures: negative cases must be red, positive cases green,
+// exercised through the full Markdown extraction path (fences, prompts,
+// continuations, quotes), not just pre-split token arrays.
+
+test('DOC-CLI-03a: a bad flag on a continuation line is rejected', async () => {
+  const facts = await collectCliFacts();
+  const markdown = '```bash\ntriss coder run "task" \\\n  --small-model zai/glm-5\n```';
+  const findings = validateRunnableExamples(facts, markdown);
+  assert.ok(findings.some((finding) => /--small-model/.test(finding.message)), JSON.stringify(findings));
+  assert.match(findings[0].message, /--small-model/);
+});
+
+test('DOC-CLI-03b: console `$` prompts are validated, not skipped', async () => {
+  const facts = await collectCliFacts();
+  const markdown = '```console\n$ triss coder run "task" --small-model zai/glm-5\n```';
+  const findings = validateRunnableExamples(facts, markdown);
+  assert.ok(findings.some((finding) => /--small-model/.test(finding.message)), JSON.stringify(findings));
+  assert.match(findings[0].message, /--small-model/);
+});
+
+test('DOC-CLI-03c: a missing mandatory option is rejected', async () => {
+  const facts = await collectCliFacts();
+  const markdown = '```bash\ntriss ask --paths README.md\n```';
+  const findings = validateRunnableExamples(facts, markdown);
+  assert.ok(findings.length >= 1, JSON.stringify(findings));
+  assert.match(findings[0].message, /--question/);
+});
+
+test('DOC-CLI-03d: quoted shell separators stay inside the prompt', async () => {
+  const facts = await collectCliFacts();
+  const markdown = '```bash\ntriss chat "Explain this text; triss coder status"\n```';
+  assert.deepEqual(validateRunnableExamples(facts, markdown), []);
+});
+
+test('DOC-CLI-03e: a `#` inside quotes is a value, not a comment', async () => {
+  const facts = await collectCliFacts();
+  const markdown = '```bash\ntriss chat "what does # mean here?"\n```';
+  assert.deepEqual(validateRunnableExamples(facts, markdown), []);
+});
+
+test('DOC-CLI-03f: unregistered integration subcommands and options are rejected', async () => {
+  const facts = await collectCliFacts();
+  const findings = validateRunnableExamples(
+    facts,
+    '```bash\ntriss jira not-a-command --made-up\n```',
   );
+  assert.ok(findings.length >= 1, JSON.stringify(findings));
 });
 
-test('DOC-CLI: site command cards reference registered flags and command paths', () => {
-  const facts = collectCliFacts();
+test('DOC-CLI-03g: the explicit skip directive exempts a fence', async () => {
+  const facts = await collectCliFacts();
+  const markdown = [
+    '<!-- doc-examples-skip -->',
+    '```bash',
+    'triss coder run "task" --small-model zai/glm-5',
+    '```',
+  ].join('\n');
+  assert.deepEqual(validateRunnableExamples(facts, markdown), []);
+});
+
+test('DOC-CLI-03h: the legend directive validates documented option lists', async () => {
+  const facts = await collectCliFacts();
+  const bad = [
+    '<!-- doc-examples-legend path="coder run" -->',
+    '```bash',
+    '--engine <name>     # real option',
+    '--small-model <p/m> # removed option',
+    '```',
+  ].join('\n');
+  const findings = validateRunnableExamples(facts, bad);
+  assert.equal(findings.length, 1, JSON.stringify(findings));
+  assert.match(findings[0].message, /--small-model/);
+
+  const good = [
+    '<!-- doc-examples-legend path="coder run" -->',
+    '```bash',
+    '--engine <name>  # real option',
+    '--isolate       # real option',
+    '```',
+  ].join('\n');
+  assert.deepEqual(validateRunnableExamples(facts, good), []);
+});
+
+test('DOC-CLI-03i: output and diagram fences without a shell language are not runnable', async () => {
+  const facts = await collectCliFacts();
+  const markdown = '```\ntriss coder run / triss_coder_run (MCP)\n```';
+  assert.deepEqual(validateRunnableExamples(facts, markdown), []);
+});
+
+test('DOC-CLI: every site command card example and flag list matches the CLI tree', async () => {
+  const facts = await collectCliFacts();
+  const integrationNames = new Set(['jira', 'linear', 'github', 'gitlab', 'confluence']);
   for (const card of COMMANDS) {
     const example = card.example.replace(/^\$\s*/, '');
-    // Card examples may be compound shell lines (`git add … && triss …`);
-    // validate the triss invocation segment.
-    const segment = example
-      .split(/&&|\|/).map((part) => part.trim())
-      .find((part) => part.startsWith('triss '));
-    assert.ok(segment, `card ${card.name} example must invoke triss`);
-    const tokens = segment.split(/\s+/);
-    const pathTokens = [];
-    let i = 1;
-    while (i < tokens.length && !tokens[i].startsWith('-')) {
-      // Integration commands (jira, linear, ...) are registered dynamically
-      // and validated by the integration docs, not the static CLI tree.
-      if (['jira', 'linear', 'github', 'gitlab', 'confluence'].includes(tokens[i])) return;
-      pathTokens.push(tokens[i]);
-      i += 1;
+    // Compound examples (`git add … && triss …`) must have every triss
+    // segment validated, and an error in a card AFTER an integration card
+    // must still fail this test — so no early returns per card.
+    const segments = example.split(/&&|\|/).map((part) => part.trim()).filter(Boolean);
+    const trissSegments = segments.filter((segment) => segment.startsWith('triss '));
+    assert.ok(trissSegments.length > 0, `card ${card.name} example must invoke triss`);
+    for (const segment of trissSegments) {
+      const markdown = '```bash\n' + segment + '\n```';
+      const findings = validateRunnableExamples(facts, markdown);
+      assert.deepEqual(findings, [], `card ${card.name} example drifts from the CLI tree`);
     }
-    const failures = checkInvocation(facts, { pathTokens, args: tokens.slice(1) });
-    assert.deepEqual(failures, [], `card ${card.name} example drifts from the CLI tree`);
+    // card.flags mixes executable flags with human-readable subcommand
+    // synopses; validate the flag-shaped entries against the resolved card
+    // command. Integration cards are exercised through their own docs.
+    if (integrationNames.has(card.name)) continue;
+    const command = facts.get(card.name);
+    assert.ok(command, `card ${card.name} must name a registered command`);
+    // Group cards (coder, config, mcp) summarize their most-used leaves, so
+    // a flag counts as registered when any descendant command declares it.
+    const descendants = [...facts.entries()].filter(([path]) => path === card.name || path.startsWith(`${card.name} `));
+    const unionOptions = new Set(descendants.flatMap(([, entry]) => [...entry.options.keys()]));
+    for (const flag of card.flags) {
+      if (!flag.startsWith('--')) continue; // subcommand synopsis entries
+      const name = flag.split(' ')[0].split('=')[0];
+      assert.ok(
+        unionOptions.has(name) || name === '--help',
+        `card ${card.name} lists unregistered flag ${name}`,
+      );
+    }
   }
 });
 

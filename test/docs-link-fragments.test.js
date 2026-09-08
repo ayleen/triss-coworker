@@ -86,6 +86,42 @@ test('DOC-LINK-01: the checker rejects bad fragments in a fixture tree', () => {
   assert.ok(failures.every((line) => /missing fragment anchor/.test(line)));
 });
 
+test('DOC-LINK-01: headings and anchors inside code samples create no anchors (R05)', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'triss-doclinks-r05-'));
+  writeFileSync(
+    join(fixture, 'DOC.md'),
+    [
+      '```md',
+      '## Phantom',
+      '```',
+      '[broken phantom](#phantom)',
+      '',
+      '```html',
+      '<a id="example-only"></a>',
+      '```',
+      '[broken example-only](#example-only)',
+      '',
+      '## Real Heading',
+      '[real](#real-heading)',
+      '',
+      '<a id="real-anchor"></a>',
+      '[real anchor](#real-anchor)',
+    ].join('\n'),
+  );
+  const { failures } = checkRepositoryDocs(fixture);
+  assert.equal(failures.length, 2, `unexpected failures:\n${failures.join('\n')}`);
+  assert.ok(failures.every((line) => /#phantom|#example-only/.test(line)));
+});
+
+test('DOC-LINK-01: a malformed fragment encoding yields a diagnostic, not a crash', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'triss-doclinks-enc-'));
+  writeFileSync(join(fixture, 'README.md'), '# Title\n');
+  writeFileSync(join(fixture, 'DOC.md'), '[bad](README.md#%zz)\n');
+  const { failures } = checkRepositoryDocs(fixture);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /invalid URL encoding in fragment/);
+});
+
 test('DOC-LINK-01: the real repository tree passes fragment validation', () => {
   const { failures } = checkRepositoryDocs(ROOT);
   assert.equal(failures.length, 0, `repository docs have broken fragments:\n${failures.join('\n')}`);

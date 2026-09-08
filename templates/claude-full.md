@@ -188,6 +188,7 @@ Then hand off a bounded implementation task instead of writing it yourself.
 Pass the complete task packet; keep architecture, authorization, final
 inspection, and acceptance with the host.
 
+<!-- doc-examples-legend path="coder run" -->
 ```bash
 triss coder run "<task>"
   --engine <name>     # opencode (default), opencode2 (beta — see docs/engines/opencode2.md), crush, or omp

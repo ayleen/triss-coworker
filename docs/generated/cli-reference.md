@@ -558,3 +558,657 @@ Options:
 - `-l, --local` — check <cwd>/.mcp.json (claude only)
 - `-t, --target <agent>` — target agent (claude | codex | both). Default: both
 
+## `triss confluence`
+
+Atlassian Confluence (REST v2) — search, read, create, update pages
+
+## `triss confluence search`
+
+CQL search; --question summarizes the result list
+
+Arguments:
+
+- `<cql>`
+
+Options:
+
+- `-l, --limit <n>` — max results
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--json` — raw JSON output
+
+## `triss confluence page`
+
+Read a page by id; ADF body is converted to plain text
+
+Arguments:
+
+- `<id>`
+
+Options:
+
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--json` — raw JSON output
+
+## `triss confluence create`
+
+Create a new page
+
+Options:
+
+- `--space <key|id>` — space key (e.g. ENG) or numeric space id
+- `--title <text>` — page title
+- `--body <text>` — plain-text body (paragraphs split on blank lines)
+- `--parent <id>` — parent page id
+- `--json` — raw JSON output
+
+## `triss confluence update`
+
+Update a page (title and/or body). Bumps the version automatically.
+
+Arguments:
+
+- `<id>`
+
+Options:
+
+- `--title <text>`
+- `--body <text>`
+
+## `triss confluence spaces`
+
+List spaces (id, key, name)
+
+Options:
+
+- `--json` — raw JSON output
+
+## `triss github`
+
+GitHub Issues — search, read, create, update, comment
+
+## `triss github search`
+
+GitHub Issues search via /search/issues; --question summarizes the list
+
+Arguments:
+
+- `<query>`
+
+Options:
+
+- `-l, --limit <n>` — max results
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--json` — raw JSON output
+
+## `triss github issue`
+
+Read an issue (repo auto-detected from git origin if omitted)
+
+Arguments:
+
+- `<number>`
+
+Options:
+
+- `--repo <owner/name>` — override repo (default: detect from origin)
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--with-comments` — include the comment thread
+- `--json` — raw JSON output
+
+## `triss github create`
+
+Create a new issue
+
+Options:
+
+- `--repo <owner/name>` — target repo (default: detect from origin)
+- `--title <text>` — issue title
+- `--body <text>` — issue body (markdown)
+- `--labels <list>` — comma-separated label names
+- `--assignees <list>` — comma-separated GitHub logins
+- `--json` — print created issue as JSON
+
+## `triss github update`
+
+Update title, body, state, labels, or assignees
+
+Arguments:
+
+- `<number>`
+
+Options:
+
+- `--repo <owner/name>` — override repo
+- `--title <text>`
+- `--body <text>`
+- `--state <open|closed>`
+- `--labels <list>` — comma-separated label names (replaces existing)
+- `--assignees <list>` — comma-separated logins (replaces existing)
+
+## `triss github comment`
+
+List comments (with --question summarize) or post one with --post
+
+Arguments:
+
+- `<number>`
+
+Options:
+
+- `--repo <owner/name>` — override repo
+- `--post <text>` — post a new comment
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--json` — raw JSON output
+
+## `triss gitlab`
+
+GitLab Issues (REST v4) — search, read, create, update, comment
+
+## `triss gitlab search`
+
+Search issues; --project narrows to one project
+
+Arguments:
+
+- `<text>`
+
+Options:
+
+- `--project <namespace/name>` — project path (auto-detected from origin)
+- `--scope <scope>` — search scope (default: all)
+- `-l, --limit <n>` — max results
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--json` — raw JSON output
+
+## `triss gitlab issue`
+
+Read an issue by IID (project auto-detected from origin)
+
+Arguments:
+
+- `<iid>`
+
+Options:
+
+- `--project <namespace/name>` — override project
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--with-comments` — include notes (comments)
+- `--json` — raw JSON output
+
+## `triss gitlab create`
+
+Create a new issue
+
+Options:
+
+- `--project <namespace/name>` — target project (auto-detected if omitted)
+- `--title <text>` — issue title
+- `--body <text>` — issue description (markdown)
+- `--labels <list>` — comma-separated labels
+- `--json` — print created issue as JSON
+
+## `triss gitlab update`
+
+Update title/body/state/labels
+
+Arguments:
+
+- `<iid>`
+
+Options:
+
+- `--project <namespace/name>`
+- `--title <text>`
+- `--body <text>`
+- `--state <open|closed>`
+- `--labels <list>` — comma-separated labels (replaces existing)
+
+## `triss gitlab comment`
+
+List notes (with --question summarize) or post one with --post
+
+Arguments:
+
+- `<iid>`
+
+Options:
+
+- `--project <namespace/name>`
+- `--post <text>` — post a new note
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--json` — raw JSON output
+
+## `triss jira`
+
+Atlassian Jira (REST v3) — search, read, create, update, comment, transition
+
+## `triss jira search`
+
+Run a JQL search; pass --question to summarize
+
+Arguments:
+
+- `<jql>`
+
+Options:
+
+- `-l, --limit <n>` — max results
+- `-q, --question <text>` — summarize the result list
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--json` — raw JSON output
+
+## `triss jira issue`
+
+Read an issue; pass --question to summarize instead of dumping
+
+Arguments:
+
+- `<key>`
+
+Options:
+
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--with-comments` — also fetch all comments
+- `--json` — raw JSON output
+
+## `triss jira update`
+
+Update fields, transition status, or link to a parent/epic
+
+Arguments:
+
+- `<key>`
+
+Options:
+
+- `--summary <text>` — new summary
+- `--description <text>` — new description (plain text — converted to ADF)
+- `--assignee <accountId>` — reassign by accountId
+- `--priority <name>` — set priority by name
+- `--status <name>` — transition to a state by name
+- `--parent <key>` — link to a parent/epic; auto-detects parent vs Epic Link customfield
+
+## `triss jira create`
+
+Create a new issue; optionally link to a parent/epic with --parent
+
+Options:
+
+- `--project <key>` — project key (e.g. TRISS)
+- `--summary <text>` — issue summary/title
+- `--type <name>` — issue type
+- `--description <text>` — plain-text description (converted to ADF)
+- `--parent <key>` — parent/epic key — auto-detected method
+- `--json` — print created issue as JSON
+
+## `triss jira comments`
+
+List comments (with --question summarize) or post one with --post
+
+Arguments:
+
+- `<key>`
+
+Options:
+
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--post <text>` — post a new comment
+- `--json` — raw JSON output
+
+## `triss jira transitions`
+
+List available status transitions, or apply one with --apply
+
+Arguments:
+
+- `<key>`
+
+Options:
+
+- `--apply <name>` — transition matching this name (or its target)
+- `--json` — raw JSON output
+
+## `triss jira attachments`
+
+List attachments on an issue
+
+Arguments:
+
+- `<key>`
+
+Options:
+
+- `--json` — raw JSON output
+
+## `triss jira whoami`
+
+Show the authenticated account (accountId is what --assignee expects)
+
+Options:
+
+- `--json` — raw JSON output
+
+## `triss linear`
+
+Linear (GraphQL) — search, read, create, update, comment, transition
+
+## `triss linear search`
+
+Full-text search; pass --question to summarize the result list
+
+Arguments:
+
+- `<term>`
+
+Options:
+
+- `-l, --limit <n>` — max results
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--json` — raw JSON output
+
+## `triss linear issue`
+
+Read an issue by identifier (TEAM-42) or UUID
+
+Arguments:
+
+- `<id>`
+
+Options:
+
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--with-comments` — include comments in the summary corpus
+- `--json` — raw JSON output
+
+## `triss linear update`
+
+Update an issue, link to project/parent, or transition state
+
+Arguments:
+
+- `<id>`
+
+Options:
+
+- `--title <text>` — new title
+- `--description <text>` — new description (markdown supported)
+- `--priority <n>` — priority 0-4
+- `--project <id>` — attach to a project (UUID)
+- `--parent <id>` — set parent issue (sub-issue) by UUID or identifier
+- `--state <name>` — transition to a workflow state by name
+- `--due-date <date>` — due date YYYY-MM-DD (TimelessDate)
+- `--milestone <id>` — project milestone UUID
+- `--assignee <ref>` — assignee UUID, email, or display name
+- `--labels <list>` — comma-separated label names or UUIDs (replaces existing; pass "" to clear)
+- `--team <id>` — team key or UUID — only required to resolve label names from a different team
+
+## `triss linear create`
+
+Create a new issue; --project links to a Project, --parent makes it a sub-issue
+
+Options:
+
+- `--team <id>` — team UUID or key
+- `--title <text>` — issue title
+- `--description <text>` — issue description (markdown)
+- `--project <id>` — attach to a Project (UUID)
+- `--parent <id>` — parent issue (UUID or identifier) for sub-issues
+- `--priority <n>` — priority 0-4
+- `--assignee <ref>` — assignee UUID, email, or display name
+- `--due-date <date>` — due date YYYY-MM-DD (TimelessDate)
+- `--milestone <id>` — project milestone UUID
+- `--labels <list>` — comma-separated label names or UUIDs
+- `--json` — print created issue as JSON
+
+## `triss linear comments`
+
+List comments (with --question summarize) or post one with --post
+
+Arguments:
+
+- `<id>`
+
+Options:
+
+- `--post <text>` — post a new comment (markdown)
+- `-q, --question <text>` — summarize through the configured provider runtime
+- `--provider <id>` — canonical provider id
+- `-m, --model <id>` — <canonical-provider>/<native-id> selector, or a bare native id resolved against --provider or the effective default provider
+- `--engine <id>` — execution engine (direct, opencode, opencode2, omp, or crush)
+- `--protect-credentials` — Use the parent-owned credential proxy for the model projection.
+A selected protected route fails closed — before any credential-bearing
+spawn — when the raw key cannot be contained or the proxy cannot start;
+there is no automatic downgrade to raw.
+- `--no-protect-credentials` — override a persisted TRISS_PROTECT_CREDENTIALS=true choice for this run
+- `-e, --effort <level>` — reasoning effort: low, medium, high, xhigh, or max
+- `--json` — raw JSON output
+
+## `triss linear states`
+
+List a team's workflow states; with --apply transition the issue named by --issue
+
+Arguments:
+
+- `<team>`
+
+Options:
+
+- `--apply <name>` — transition --issue to this state
+- `--issue <id>` — issue identifier or UUID (used with --apply)
+- `--json` — raw JSON output
+
+## `triss linear attachments`
+
+List attachments on an issue
+
+Arguments:
+
+- `<id>`
+
+Options:
+
+- `--json` — raw JSON output
+
+## `triss linear project-list`
+
+List projects for a team (id, name, startDate, targetDate)
+
+Arguments:
+
+- `<team>`
+
+Options:
+
+- `--json` — raw JSON output
+
+## `triss linear project-create`
+
+Create a Linear project; --initiative links to an initiative UUID
+
+Options:
+
+- `--team <id>` — team UUID or key
+- `--name <text>` — project name
+- `--start-date <date>` — start date ISO 8601 (YYYY-MM-DD)
+- `--target-date <date>` — target date ISO 8601 (YYYY-MM-DD)
+- `--initiative <id>` — initiative UUID to attach this project to
+- `--json` — print created project as JSON
+
+## `triss linear initiative-list`
+
+List all initiatives with their linked projects
+
+Options:
+
+- `--json` — raw JSON output
+
+## `triss linear milestone-list`
+
+List milestones for a project (id, name, targetDate)
+
+Arguments:
+
+- `<project>`
+
+Options:
+
+- `--json` — raw JSON output
+
+## `triss linear milestone-create`
+
+Create a milestone inside a project (a Gantt diamond)
+
+Options:
+
+- `--project <id>` — project UUID
+- `--name <text>` — milestone name
+- `--target-date <date>` — target date YYYY-MM-DD
+- `--description <text>` — milestone description
+- `--json` — print created milestone as JSON
+
+## `triss linear label-list`
+
+List a team's labels (id, name, color)
+
+Arguments:
+
+- `<team>`
+
+Options:
+
+- `--json` — raw JSON output
+
+## `triss linear bulk-update`
+
+Apply the same field changes to many issues in one call
+
+Options:
+
+- `--ids <list>` — comma- or space-separated issue identifiers/UUIDs
+- `--project <id>` — attach to a project (UUID)
+- `--parent <id>` — set parent issue (UUID or identifier)
+- `--priority <n>` — priority 0-4
+- `--due-date <date>` — due date YYYY-MM-DD (TimelessDate)
+- `--milestone <id>` — project milestone UUID
+- `--assignee <ref>` — assignee UUID, email, or display name
+- `--labels <list>` — comma-separated label names or UUIDs (pass "" to clear)
+- `--team <id>` — team key or UUID — only required to resolve label names
+- `--concurrency <n>` — parallel updates (default 5)
+- `--json` — print per-issue results as JSON
+

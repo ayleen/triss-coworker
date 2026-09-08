@@ -11,6 +11,15 @@ Machine consumers should prefer documented JSON modes and treat their schema
 version as part of the contract. Human-readable output may evolve without a
 schema migration.
 
+This package ships a machine-generated inventory at
+[docs/generated/cli-reference.md](generated/cli-reference.md) — every
+registered command path, argument, and option, including the dynamically
+registered tracker commands — re-verified against the executable CLI in CI.
+The MCP inventory lives next to it as
+[docs/generated/mcp-reference.md](generated/mcp-reference.md). For the
+exact contract of an installed version, browse these files pinned to your
+release tag in the repository.
+
 ## `triss config wizard`
 
 Interactive setup, Easy by default; Advanced is an explicit choice. Both paths

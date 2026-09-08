@@ -16,6 +16,8 @@
     "docs/cli-reference.md",
     "docs/compatibility.md",
     "docs/configuration.md",
+    "docs/generated/mcp-reference.md",
+    "docs/generated/cli-reference.md",
     "docs/data-flows.md",
     "docs/deprecations.md",
     "docs/engines/crush.md",

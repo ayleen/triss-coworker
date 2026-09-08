@@ -105,6 +105,40 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Machine-checkable minimum for a release section (review R07): it must
+// contain at least one real `###` subsection and, under it, at least one
+// non-empty change entry that is not a placeholder. Fenced code blocks and
+// HTML comments never count — a `### Fixed` shown only inside a code sample
+// is not a changelog entry. This checks structure, not literary quality.
+export function sectionHasSubstantiveContent(section) {
+  const visible = section
+    .replace(/```[\s\S]*?```/g, (match) => match.replace(/[^\n]/g, ' '))
+    .replace(/<!--[\s\S]*?-->/g, (match) => match.replace(/[^\n]/g, ' '));
+  let inSubsection = false;
+  let hasSubsection = false;
+  let hasEntry = false;
+  for (const raw of visible.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^###\s+\S/.test(line)) {
+      inSubsection = true;
+      hasSubsection = true;
+      hasEntry = false;
+      continue;
+    }
+    if (/^##\s/.test(line)) {
+      inSubsection = false;
+      continue;
+    }
+    if (!inSubsection) continue;
+    const entry = line.replace(/^[-*]\s+/, '').trim();
+    if (line.startsWith('-') && entry && !/^(tbd|todo|tba)\b/i.test(entry) && !/^[-–—]+$/.test(entry)) {
+      hasEntry = true;
+    }
+  }
+  return hasSubsection && hasEntry;
+}
+
 export function buildReleaseNotes({ tag, changelog, enginesNode }) {
   if (!/^v\d+\.\d+\.\d+(?:[-+].+)?$/.test(tag)) {
     fail(`--tag must look like v1.2.3 (got "${tag}")`);
@@ -120,8 +154,11 @@ export function buildReleaseNotes({ tag, changelog, enginesNode }) {
     fail(`CHANGELOG.md has no "## [${version}]" section for ${tag}. ` +
          'Add it before publishing; Unreleased is never used as release notes.');
   }
-  if (!/### (Added|Changed|Fixed|Removed|Security|Deprecated)/.test(section)) {
-    fail(`the CHANGELOG section for ${version} has no substantive subsections — refusing generic notes`);
+  if (!sectionHasSubstantiveContent(section)) {
+    fail(
+      `the CHANGELOG section for ${version} has no substantive content — ` +
+        'it needs a real ### subsection with at least one non-placeholder change entry',
+    );
   }
   return renderReleaseNotes({ version, section, enginesNode });
 }

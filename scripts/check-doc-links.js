@@ -6,7 +6,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { extractMarkdownLinkTargets } from './markdown-links.js';
+import { extractMarkdownLinkTargets, withoutCode } from './markdown-links.js';
 
 const GITHUB_FILE_URL = /^https?:\/\/github\.com\/ayleen\/triss-coworker\/(?:blob|tree)\/[^/]+\/(.+?)(?:#.+)?$/i;
 const DEFAULT_SKIP_DIRS = new Set(['.git', 'node_modules', '.codex', '.claude', 'dist', '.wrangler']);
@@ -41,11 +41,15 @@ export function githubSlug(headingText) {
 
 // Collect every fragment a Markdown file can receive: GitHub-style heading
 // slugs (with -1/-2 suffixes on duplicates) plus explicit HTML anchors
-// (<a id="...">, <a name="...">, id="..." on any element).
+// (<a id="...">, <a name="...">, id="..." on any element). Headings and HTML
+// attributes inside fenced code, inline code, and HTML comments do NOT
+// create anchors — a code sample showing `## Phantom` syntax must not
+// validate a link to #phantom (review R05).
 export function headingFragments(source) {
   const fragments = new Set();
   const seen = new Map();
-  for (const line of source.split('\n')) {
+  const visible = withoutCode(stripHtmlComments(source));
+  for (const line of visible.split('\n')) {
     const heading = line.match(/^ {0,3}(#{1,6})\s+(.*)$/);
     if (heading) {
       const base = githubSlug(heading[2].replace(/\s+#+\s*$/, ''));
@@ -55,10 +59,14 @@ export function headingFragments(source) {
       fragments.add(count === 0 ? base : `${base}-${count}`);
     }
   }
-  for (const match of source.matchAll(/\b(?:id|name)="([^"]+)"/g)) {
+  for (const match of visible.matchAll(/\b(?:id|name)="([^"]+)"/g)) {
     fragments.add(match[1]);
   }
   return fragments;
+}
+
+function stripHtmlComments(source) {
+  return source.replace(/<!--[\s\S]*?-->/g, (match) => match.replace(/[^\n]/g, ''));
 }
 
 export function validateFragment(fileLabel, raw, fragment, targetExists, targetFragments) {
@@ -69,6 +77,14 @@ export function validateFragment(fileLabel, raw, fragment, targetExists, targetF
     return `${fileLabel}: missing fragment anchor: ${raw}`;
   }
   return null;
+}
+
+function safeFragmentDecode(fileLabel, raw, fragment) {
+  try {
+    return { decoded: decodeURIComponent(fragment) };
+  } catch {
+    return { error: `${fileLabel}: invalid URL encoding in fragment of ${raw}` };
+  }
 }
 
 function resolveLocalTarget(file, rawTarget, root) {
@@ -128,10 +144,15 @@ export function checkRepositoryDocs(root) {
         const localPath = join(root, ...githubMatch[1].split('/'));
         const fragment = target.includes('#') ? target.split('#')[1] : undefined;
         if (fragment && githubMatch[1].endsWith('.md')) {
+          const decoded = safeFragmentDecode(file, link.raw, fragment);
+          if (decoded.error) {
+            failures.push(decoded.error);
+            continue;
+          }
           const failure = validateFragment(
             file,
             link.raw,
-            decodeURIComponent(fragment),
+            decoded.decoded,
             fragmentsFor(localPath) !== null,
             fragmentsFor(localPath) ?? new Set(),
           );
@@ -162,10 +183,15 @@ export function checkRepositoryDocs(root) {
         continue;
       }
       if (fragment && stat.isFile()) {
+        const decoded = safeFragmentDecode(file, link.raw, fragment);
+        if (decoded.error) {
+          failures.push(decoded.error);
+          continue;
+        }
         const failure = validateFragment(
           file,
           link.raw,
-          decodeURIComponent(fragment),
+          decoded.decoded,
           true,
           fragmentsFor(targetPath) ?? new Set(),
         );
