@@ -14,6 +14,34 @@ Format:
 
 <!-- add new entries below this line -->
 
+## 2026-09-09 — validators drifted from real Commander and CommonMark (PR #122 V01/V02)
+
+**What happened.** The third re-review of the docs PR found two drift
+classes: (1) the hand-rolled CLI grammar in `check-doc-examples.js`
+disagreed with real Commander (`--help` short-circuiting even as an
+option VALUE, `--` rejected, `--flag=value` accepted for boolean flags,
+attached short values rejected, newlines inside open quotes splitting one
+command in two); (2) the release-notes fence regex
+`/^(`{3,}|~{3,})\S*$/` missed CommonMark opener spellings (space before
+the info string, multi-word info strings) and one-line HTML comments, so
+a code sample could mint a release section and a comment-only bullet
+count as a change entry. The round-2 "safety" test was also vacuous: it
+wrote its fixture to the wrong root (asserted nothing about registration)
+and invoked the fixture with an unregistered option, so the parse failed
+before any action could have run.
+
+**Root cause.** Reimplementing a parser (Commander's option grammar,
+CommonMark fences) instead of using the real thing; and a safety test
+that never proved its fixture was actually loaded.
+
+**Prevention.** Parse with the real parser via a parse-only seam
+(`buildProgram({ commandFactory })` + `ParseOnlyCommand`); keep ONE shared
+CommonMark-aware block scanner (`markdown-links.js
+annotateMarkdownLines`) for structural Markdown questions; a safety test
+must first assert its fixture is registered in the inventory, then use a
+syntactically valid invocation with declared options.
+
+
 ## 2026-09-08 — Astro component rules and bundling broke "obviously correct" site edits
 - **What happened:** Three separate failures from one site change set: (1) an
   .astro component edit placed HTML comments before the frontmatter, so Astro
