@@ -14,6 +14,33 @@ Format:
 
 <!-- add new entries below this line -->
 
+## 2026-09-09 — lexers worked per physical line, not per logical unit (PR #122 H01/H02)
+
+**What happened.** The fifth re-review found both dev-tool parsers still
+broken on wrapped input: `lexShellCommands` started consuming heredoc body
+as soon as a `<<` redirection was DECLARED, so a trailing backslash on the
+header line silently threw away the continuation line's argv (a mutated
+real template example and the package fixture both passed with empty
+findings, and a valid `--isolate` on the continuation vanished); the
+Markdown scanner matched code spans within one physical line, so a span
+wrapping to the next paragraph line let the `<!--` on that line open a real
+comment — hiding a release section or gluing the next version into the
+notes.
+
+**Root cause.** Round-3/4 fixes modeled shell and Markdown semantics at
+physical-line granularity: "heredoc declared" was conflated with "header
+finished", and "span unclosed at EOL" was treated as "span abandoned",
+while real units are the logical command (continuations, quote state) and
+the inline container (the paragraph).
+
+**Prevention.** When porting shell or Markdown semantics into a checker,
+decide state at the boundaries of the LOGICAL unit (logical line, inline
+container), not the physical line; regression fixtures must include the
+wrapped/continued spelling of every construct (header continuation with
+`\`, code span wrapping to the next line), asserting the recovered argv or
+the exact section boundary — empty findings prove nothing.
+
+
 ## 2026-09-09 — the round-3 lexer silently discarded heredoc commands (PR #122 G01)
 
 **What happened.** The fourth re-review found that the `lexShellCommands`
