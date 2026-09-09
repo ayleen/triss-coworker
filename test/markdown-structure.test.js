@@ -120,3 +120,50 @@ test('G02: a real multi-line comment still swallows code-span-looking lines', ()
   assert.deepEqual(records.map((record) => record.kind), ['text', 'comment', 'comment']);
   assert.equal(records[0].visible, '');
 });
+
+// H02 fixtures (review round 5): code spans live inside an inline container
+// (a paragraph), not a physical line — a span opened on one line closes on a
+// later line of the same paragraph, and block boundaries (blank line,
+// heading, fence, indented code, a line-initial comment block) end it.
+
+test('H02: a code span wraps across paragraph lines and never opens a comment', () => {
+  for (const tick of ['`', '``']) {
+    const source = `Parser preserves ${tick}token\nand <!--${tick} literally.\n\n## [9.9.9]`;
+    const records = annotateMarkdownLines(source);
+    assert.deepEqual(records.map((record) => record.kind), ['text', 'text', 'text', 'text']);
+    assert.equal(records[0].visible, `Parser preserves ${tick}token`, 'the opener line stays visible');
+    assert.equal(
+      records[1].visible,
+      `and <!--${tick} literally.`,
+      'the `<!--` inside the wrapped span is literal visible content',
+    );
+    assert.equal(records[3].visible, '## [9.9.9]', 'the heading after the paragraph stays structural');
+  }
+});
+
+test('H02: a wrapped span inside a list item keeps its continuation visible', () => {
+  const records = annotateMarkdownLines('- Preserve `token\n  and <!--` literally.\n\n## [9.9.8]');
+  assert.equal(records[0].kind, 'text');
+  assert.equal(records[1].kind, 'text');
+  assert.equal(records[1].visible, '  and <!--` literally.');
+  assert.equal(records[3].visible, '## [9.9.8]', 'the next heading is not hidden or merged');
+});
+
+test('H02: a line-initial comment block wins over an unclosed span opener', () => {
+  const records = annotateMarkdownLines('Parser preserves `token\n<!-- real HTML block\n\n## [9.9.9]');
+  assert.equal(records[0].visible, 'Parser preserves `token');
+  // The opener line keeps kind 'text' with empty visible (V02 contract); the
+  // block comment then hides everything up to a `-->`.
+  assert.deepEqual(records.slice(1).map((record) => record.kind), ['text', 'comment', 'comment']);
+  assert.equal(records[1].visible, '', 'block precedence: the comment opens and swallows the rest');
+  assert.equal(records[3].visible, '');
+});
+
+test('H02: an unclosed span is abandoned at a blank line and a heading', () => {
+  const records = annotateMarkdownLines('text `<!-- more\n\nplain <!-- note --> tail\n## Head `x`');
+  assert.equal(records[0].visible, 'text `<!-- more');
+  // The blank line ends the paragraph; comment recognition works again.
+  assert.equal(records[2].visible, 'plain  tail');
+  // A heading interrupts the paragraph and is scanned on its own.
+  assert.equal(records[3].visible, '## Head `x`');
+});

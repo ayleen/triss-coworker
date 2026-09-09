@@ -319,3 +319,79 @@ test('G02: a `<!--` code span does not glue the next version into the section', 
   // The inline-code entry itself is substantive content.
   assert.equal(sectionHasSubstantiveContent(section), true);
 });
+
+// H02 fixtures (review round 5): a code span does not end at a physical
+// newline — inside one paragraph (or list item) it wraps to the following
+// line, and `<!--` reached while the span is open is literal span content,
+// never a comment that hides or merges release sections.
+
+test('H02: a version after a paragraph-wrapped code span is still found and accepted', () => {
+  for (const tick of ['`', '``']) {
+    const changelog = [
+      '# Changelog',
+      '',
+      '## [Unreleased]',
+      '',
+      `Parser preserves ${tick}token`,
+      `and <!--${tick} literally.`,
+      '',
+      '## [9.9.9]',
+      '',
+      '### Fixed',
+      '',
+      '- Fixed the checker.',
+    ].join('\n');
+    const section = extractVersionSection(changelog, '9.9.9');
+    assert.ok(section !== null, `${tick}: the real section must be found`);
+    assert.match(section, /- Fixed the checker\./);
+    const notes = buildReleaseNotes({ tag: 'v9.9.9', changelog, enginesNode: '>=22.12.0' });
+    assert.match(notes, /## What changed/);
+    assert.match(notes, /Fixed the checker\./);
+  }
+});
+
+test('H02: a wrapped code span does not glue the next version into the section', () => {
+  const changelog = [
+    '## [9.9.9]',
+    '',
+    '### Fixed',
+    '',
+    '- Preserve `token',
+    '  and <!--` literally.',
+    '',
+    '## [9.9.8]',
+    '',
+    '### Fixed',
+    '',
+    '- Old release only.',
+  ].join('\n');
+  const section = extractVersionSection(changelog, '9.9.9');
+  assert.ok(section !== null, 'the section must be found');
+  assert.match(section, /- Preserve `token\n {2}and <!--` literally\./, 'the wrapped span entry stays visible');
+  assert.ok(!section.includes('9.9.8'), 'the next version heading must not leak in');
+  assert.ok(!section.includes('Old release only.'), 'the next version content must not leak in');
+  assert.equal(sectionHasSubstantiveContent(section), true);
+  const notes = buildReleaseNotes({ tag: 'v9.9.9', changelog, enginesNode: '>=22.12.0' });
+  assert.doesNotMatch(notes, /Old release only|## \[9\.9\.8\]/);
+});
+
+test('H02: a line-initial comment block still wins over an unclosed span opener', () => {
+  // Block precedence must survive the fix: `<!--` at the start of a line is
+  // a real HTML block that interrupts the paragraph, even when the previous
+  // paragraph line left a code span unclosed.
+  const changelog = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    'Parser preserves `token',
+    '<!-- real HTML block',
+    '',
+    '## [9.9.9]',
+    '',
+    '### Fixed',
+    '',
+    '- Fixed the checker.',
+  ].join('\n');
+  assert.equal(extractVersionSection(changelog, '9.9.9'), null);
+});
