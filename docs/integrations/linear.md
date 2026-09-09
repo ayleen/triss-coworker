@@ -18,8 +18,9 @@ LINEAR_API_URL=https://api.linear.app/graphql   # optional override
 
 Get a personal API key at <https://linear.app/settings/api>.
 
-For per-project setups (different Linear teams per project), see the
-[recipes in docs/configuration.md](../configuration.md#recipes--common-setups-end-to-end).
+For per-project setups (different Linear teams per project), see
+[configuration files and precedence](../configuration.md#configuration-files-and-precedence)
+in docs/configuration.md: project `./.triss.env` values override global ones.
 
 ## Commands
 

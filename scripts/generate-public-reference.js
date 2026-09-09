@@ -1,0 +1,258 @@
+#!/usr/bin/env node
+
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 ayleen
+
+// Generate the machine-checked public reference artifacts from the live CLI
+// tree and MCP schema factories:
+//
+//   docs/generated/cli-reference.md          — every registered command group,
+//                                              leaf, argument, and option
+//   docs/generated/mcp-reference.md          — the tool inventory per readiness
+//                                              fixture (core-only, coder, all
+//                                              integrations)
+//   site/src/data/generated/public-reference.json — both inventories for the
+//                                              website build
+//
+// The generator is side-effect-free: it imports buildProgram() (no argv parse,
+// no env files, no integrations bootstrap) and assembleTools() with fake
+// readiness fixtures. It never executes a command action.
+//
+// `--check` regenerates in memory and exits non-zero when the tracked files
+// would change; CI uses it, development uses the writing mode:
+//
+//   node scripts/generate-public-reference.js           # write files
+//   node scripts/generate-public-reference.js --check   # verify only
+
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildProgram } from '../src/cli-program.js';
+import { loadIntegrations } from '../src/integrations/_registry.js';
+import { assembleTools } from '../src/mcp/tools.js';
+import { CANONICAL_PROVIDER_IDS } from '../src/provider-contract.js';
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+function jsonSafeDefault(value) {
+  if (value === undefined) return null;
+  if (typeof value === 'function' || typeof value === 'symbol') return null;
+  try {
+    JSON.stringify(value);
+  } catch {
+    return null;
+  }
+  return value;
+}
+
+function commandInventory(program) {
+  const commands = [];
+  const visit = (command, parentPath, isRoot = false) => {
+    const path = isRoot ? parentPath : [...parentPath, command.name()];
+    if (path.length > 0) {
+      commands.push({
+        path: path.join(' '),
+        description: command.description() || '',
+        args: command.registeredArguments.map((arg) => ({
+          name: arg._name ? `${arg.required ? '<' : '['}${arg._name}${arg.required ? '>' : ']'}${arg.variadic ? '...' : ''}` : '',
+          required: Boolean(arg.required),
+          variadic: Boolean(arg.variadic),
+          description: arg.description || '',
+        })),
+        options: command.options.map((opt) => ({
+          flags: opt.flags,
+          description: opt.description || '',
+          // Commander semantics: `mandatory` = the option itself must be
+          // present (requiredOption); `valueRequired` = the option consumes
+          // a value when present. The old single `required` field conflated
+          // the two and is intentionally no longer published.
+          mandatory: opt.mandatory === true,
+          valueRequired: opt.required === true,
+          variadic: opt.variadic === true || /\.\.\./.test(opt.flags),
+          // JSON-compatible defaults keep their native type; anything not
+          // JSON-serializable is published as null.
+          defaultValue: jsonSafeDefault(opt.defaultValue),
+        })),
+      });
+    }
+    for (const sub of command.commands) visit(sub, path);
+  };
+  visit(program, [], true);
+  return commands;
+}
+
+function mcpToolInventory(tool) {
+  const schema = tool.inputSchema ?? {};
+  const properties = schema.properties ?? {};
+  return {
+    name: tool.name,
+    description: tool.description || '',
+    required: schema.required ?? [],
+    properties: Object.entries(properties).map(([key, prop]) => ({
+      name: key,
+      type: prop.type ?? (prop.enum ? 'enum' : 'any'),
+      enum: prop.enum ?? null,
+      description: prop.description || '',
+    })),
+  };
+}
+
+const MCP_FIXTURES = [
+  { id: 'core', readyIntegrations: [], coderReady: false, label: 'Always available (core)' },
+  { id: 'coder', readyIntegrations: [], coderReady: true, label: 'Any canonical provider credential configured' },
+  { id: 'all-integrations', readyIntegrations: ['jira', 'linear', 'github', 'gitlab', 'confluence'], coderReady: true, label: 'Every integration ready + coder' },
+];
+
+export async function collectPublicReference() {
+  // Integration commands are part of the executable CLI, so the inventory
+  // must include them — without running their bootstrap hooks (no
+  // credential child processes, no env priming).
+  const integrations = await loadIntegrations({ bootstrap: false });
+  const program = buildProgram({ integrations });
+  const cli = commandInventory(program);
+
+  const mcp = MCP_FIXTURES.map((fixture) => ({
+    id: fixture.id,
+    label: fixture.label,
+    tools: assembleTools({
+      readyIntegrations: fixture.readyIntegrations,
+      coderReady: fixture.coderReady,
+    }).map(mcpToolInventory),
+  }));
+
+  return {
+    schema: 'triss-public-reference/1',
+    providers: [...CANONICAL_PROVIDER_IDS],
+    cli,
+    mcp,
+  };
+}
+
+// The JSON consumed by the website keeps the full CLI inventory but only the
+// MCP tool names per fixture — the verbose schemas belong to the Markdown
+// reference, not to every site build.
+export function renderSiteJson(reference) {
+  return {
+    schema: reference.schema,
+    providers: reference.providers,
+    cli: reference.cli,
+    mcp: reference.mcp.map((fixture) => ({
+      id: fixture.id,
+      label: fixture.label,
+      tools: fixture.tools.map((tool) => tool.name),
+    })),
+  };
+}
+
+function renderCliMarkdown(cli) {
+  const lines = [
+    '<!-- GENERATED by scripts/generate-public-reference.js — do not edit by hand.',
+    '     Regenerate with `node scripts/generate-public-reference.js`. -->',
+    '',
+    '# Generated CLI inventory',
+    '',
+    'Every command path registered by the `triss` executable, with its arguments',
+    'and options. The semantic reference lives in [../cli-reference.md](../cli-reference.md);',
+    'this file is the machine-checked inventory.',
+    '',
+  ];
+  for (const command of cli) {
+    lines.push(`## \`triss ${command.path}\``, '');
+    if (command.description) lines.push(command.description, '');
+    if (command.args.length) {
+      lines.push('Arguments:', '');
+      for (const arg of command.args) {
+        lines.push(`- \`${arg.name}\`${arg.description ? ` — ${arg.description}` : ''}`);
+      }
+      lines.push('');
+    }
+    if (command.options.length) {
+      lines.push('Options:', '');
+      for (const opt of command.options) {
+        lines.push(`- \`${opt.flags}\`${opt.description ? ` — ${opt.description}` : ''}`);
+      }
+      lines.push('');
+    }
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+function renderMcpMarkdown(mcp) {
+  const lines = [
+    '<!-- GENERATED by scripts/generate-public-reference.js — do not edit by hand.',
+    '     Regenerate with `node scripts/generate-public-reference.js`. -->',
+    '',
+    '# Generated MCP inventory',
+    '',
+    'The tool list depends on configured integrations and provider credentials;',
+    'there is no single fixed tool count. Each fixture below is generated from',
+    'the real schema factories with fake readiness facts.',
+    '',
+  ];
+  for (const fixture of mcp) {
+    lines.push(`## ${fixture.label} (${fixture.tools.length} tools)`, '');
+    for (const tool of fixture.tools) {
+      lines.push(`### \`${tool.name}\``, '', tool.description, '');
+      const props = tool.properties;
+      if (props.length) {
+        lines.push('Input properties:', '');
+        for (const prop of props) {
+          const required = tool.required.includes(prop.name) ? ' (required)' : '';
+          const enumPart = prop.enum ? `; one of: ${prop.enum.join(', ')}` : '';
+          lines.push(`- \`${prop.name}\` — ${prop.type}${enumPart}${required}. ${prop.description}`.trimEnd());
+        }
+        lines.push('');
+      }
+    }
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+export function renderArtifacts(reference) {
+  return {
+    'docs/generated/cli-reference.md': renderCliMarkdown(reference.cli),
+    'docs/generated/mcp-reference.md': renderMcpMarkdown(reference.mcp),
+    'site/src/data/generated/public-reference.json': `${JSON.stringify(renderSiteJson(reference), null, 2)}\n`,
+  };
+}
+
+export async function artifactPaths() {
+  return Object.keys(renderArtifacts(await collectPublicReference()));
+}
+
+async function main() {
+  const check = process.argv.includes('--check');
+  const artifacts = renderArtifacts(await collectPublicReference());
+  const changed = [];
+  for (const [relPath, content] of Object.entries(artifacts)) {
+    const abs = join(REPO_ROOT, relPath);
+    let existing = null;
+    try {
+      existing = readFileSync(abs, 'utf8');
+    } catch {
+      /* new file */
+    }
+    if (existing !== content) changed.push(relPath);
+    if (!check) {
+      mkdirSync(dirname(abs), { recursive: true });
+      writeFileSync(abs, content);
+    }
+  }
+  if (check) {
+    if (changed.length) {
+      process.stderr.write(
+        `generated reference artifacts are stale; regenerate with \`node scripts/generate-public-reference.js\`:\n` +
+          changed.map((p) => `  ${relative(REPO_ROOT, p) || p}`).join('\n') +
+          '\n',
+      );
+      process.exit(1);
+    }
+    process.stdout.write('generated reference artifacts are up to date\n');
+    return;
+  }
+  process.stdout.write(`wrote ${Object.keys(artifacts).length} generated reference artifacts\n`);
+}
+
+if (process.argv[1] && relative(process.argv[1], fileURLToPath(import.meta.url)) === '') {
+  main();
+}

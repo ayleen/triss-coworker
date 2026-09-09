@@ -81,14 +81,21 @@ No host integration is required. Set the profile fields globally; omitting the
 value makes `config set` prompt (and masks secret fields):
 
 ```bash
+triss config set -g TRISS_OPENAI_COMPATIBLE_BASE_URL
 triss config set -g TRISS_OPENAI_COMPATIBLE_API_KEY
 triss config set -g TRISS_OPENAI_COMPATIBLE_MODEL
 triss config set -g TRISS_OPENAI_COMPATIBLE_SMALL_MODEL
 triss status
 ```
-These profile-field commands preserve existing provider and engine selections.
-Check that `triss status` shows the credential and defaults you intend; use
-`triss config wizard --advanced` if you need to change them.
+
+`openai-compatible` is a configurable profile, not a provider detector: its
+built-in endpoint is `https://api.deepseek.com/v1`. Set the base URL
+explicitly when using another compatible endpoint. These commands edit profile
+fields; they do not reset an existing default provider or engine. Check that
+`triss status` shows the endpoint, credential, and defaults you intend; use
+`triss config wizard --advanced` if you need to change them. For headless
+use, interactive prompts do not apply — assemble a complete configuration
+with `triss config wizard --yes` instead.
 
 
 Advanced provider and engine fields are documented in

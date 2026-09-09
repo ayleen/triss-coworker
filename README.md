@@ -55,7 +55,7 @@ triss config wizard --yes --agent none
 Connect Claude Code, Codex, or both:
 
 ```bash
-triss init --target claude --global --setup   # writes rules, then runs the wizard
+triss init --target claude --global --setup   # runs the setup wizard first, then writes rules
 triss init --target codex --global
 triss mcp install --target claude --global
 triss mcp install --target codex --global
@@ -65,12 +65,17 @@ triss mcp install --target codex --global
 integration. Omit values to enter them interactively; secret input is masked:
 
 ```bash
+triss config set -g TRISS_OPENAI_COMPATIBLE_BASE_URL
 triss config set -g TRISS_OPENAI_COMPATIBLE_API_KEY
 triss config set -g TRISS_OPENAI_COMPATIBLE_MODEL
 triss config set -g TRISS_OPENAI_COMPATIBLE_SMALL_MODEL
 ```
 
-Check the credential and selected defaults with `triss status`. Existing provider and engine choices are not changed by these three profile-field commands; use `triss config wizard --advanced` to adjust them if needed.
+`openai-compatible` is a configurable profile, not a provider detector: its
+built-in endpoint is `https://api.deepseek.com/v1`. Set the base URL explicitly
+when using another compatible endpoint. These four commands edit profile
+fields; they do not reset an existing default provider or engine. Check the
+effective configuration with `triss status` before the first request.
 
 For an installed host, run `triss mcp status` and restart that host's session. There is no need to repeat `triss init` or `triss mcp install` if the wizard already connected it. Terminal users skip this step.
 
@@ -123,7 +128,7 @@ Every provider has an endpoint, credential, `model` role, and `smallModel` role.
 4. global `~/.config/triss/.env`;
 5. registry defaults.
 
-`TRISS_DEFAULT_PROVIDER` selects the provider when a request omits one; `TRISS_DEFAULT_ENGINE` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush` when it omits an engine. Direct CLI and MCP commands accept a native model id. Coder model options use `<provider>/<model-id>`. Every engine can execute non-coder model projections (`ask`, `review`, `chat`, …); what differs per engine is the available protection, not permission to run. `opencode` and `direct` have a verified read-only projection; `opencode2` runs the same deny-everything projection agent through its run-scoped config surface, `omp` uses its run-private policy overlay, and `crush` runs single-agent with the restrict allowlist. Engines without a verified projection report their concrete limitation as a warning on the result — never as a refusal.
+`TRISS_DEFAULT_PROVIDER` selects the provider when a request omits one; `TRISS_DEFAULT_ENGINE` selects `direct`, `opencode`, `opencode2`, `omp`, or `crush` when it omits an engine. The `--model` value is either a qualified `<canonical-provider>/<native-id>` selector or a bare native id; a bare id resolves against `--provider` when given, otherwise against the effective default provider. An explicit `--provider` that conflicts with a qualified model prefix is rejected, not silently replaced. Every engine can execute non-coder model projections (`ask`, `review`, `chat`, …); what differs per engine is the available protection, not permission to run. `opencode` and `direct` have a verified read-only projection; `opencode2` runs the same deny-everything projection agent through its run-scoped config surface, `omp` uses its run-private policy overlay, and `crush` runs single-agent with the restrict allowlist. Engines without a verified projection report their concrete limitation as a warning on the result — never as a refusal.
 
 Shared reasoning effort values:
 
@@ -135,13 +140,19 @@ Examples:
 
 ```bash
 triss ask --provider zai --model glm-5.2 --effort high \
-  --paths src --question "Find correctness defects"
+  --paths 'src/**/*.js' \
+  --question "Find correctness defects. Cite file paths and line numbers."
 
 triss review --provider moonshot --model kimi-k3 --effort max
 
 triss chat --provider openai-compatible --effort low \
   "Explain this error"
 ```
+
+`--paths` accepts text files or quoted glob patterns. Directories are not read
+recursively; an input like `--paths src` fails with a "no readable file
+content" error before any model call. Quote globs so Triss, rather than the
+shell, expands them.
 
 Omit `--model` to use the command's provider role. There are no public model presets.
 
@@ -184,11 +195,15 @@ never gains ambient file, shell, edit, skill, or delegation access. The other
 engines apply their best-effort equivalents (run-scoped config surface,
 run-private policy overlay, or the restrict allowlist) and attach a warning
 that names exactly what is not verified. The process still runs as the current
-OS user and is not a filesystem sandbox. Add `--protect-credentials` to a model
-command when the selected credential can be kept behind the parent-owned proxy
-(it falls back to a best-effort raw run with a warning when a protected route
-is unavailable); `--no-protect-credentials` overrides a persisted
-`TRISS_PROTECT_CREDENTIALS=true` choice for one run. For coder runs configured
+OS user and is not a filesystem sandbox. Best-effort tool-policy support does
+not imply an automatic credential downgrade: a selected protected route fails
+closed — before any credential-bearing spawn — when the raw key cannot be
+contained by the checked credential boundary or when the proxy cannot start.
+`--protect-credentials` requests the parent-owned credential proxy;
+`--no-protect-credentials` is an explicit choice to run with the selected raw
+credential and a disclosed limitation, and it overrides a persisted
+`TRISS_PROTECT_CREDENTIALS=true` (or `TRISS_CODER_PROTECT_CREDENTIALS=true`)
+choice for one run. For coder runs configured
 through the wizard, `--coder-protect-credentials` / `--coder-no-protect-credentials`
 persist `TRISS_CODER_PROTECT_CREDENTIALS=true` / `=false` (cannot be combined);
 the coder-specific value takes precedence over the shared
@@ -287,7 +302,7 @@ Engine details:
 
 If the wizard has not already connected your host, choose Claude Code or Codex in the [host-connection guide](https://triss.work/docs/getting-started/#step-4). Only run setup for the host you intend to use.
 
-Core tools include `triss_ask`, `triss_chat`, `triss_fetch`, `triss_review`, `triss_write`, `triss_commit_msg`, `triss_status`, and the migration/update surfaces. Coder tools appear when any canonical provider credential is configured. Tracker tools appear only when their integration credential is ready.
+Core tools include `triss_ask`, `triss_chat`, `triss_fetch`, `triss_review`, `triss_review_shard`, `triss_write`, `triss_commit_msg`, and `triss_status`. Updates and migration stay CLI-side: the MCP server emits passive update notices but exposes no update or migration tool. Coder tools appear when any canonical provider credential is configured. Tracker tools appear only when their integration credential is ready.
 
 The MCP schemas use the same `provider`, `model`, `effort`, and engine contracts as the CLI. Full reference: [MCP](https://github.com/ayleen/triss-coworker/blob/main/docs/mcp.md).
 
@@ -316,7 +331,7 @@ Usage records preserve provider, model, token-class provenance, billing mode, an
 ## Updates
 
 ```bash
-triss update --check
+triss update
 triss update --apply
 triss update --rollback
 ```

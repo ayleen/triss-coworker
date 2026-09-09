@@ -18,8 +18,12 @@ Use instead of reading files yourself when:
 ```bash
 triss ask --paths <file1> <file2> ... --question "<specific question>"
 # heavier analysis:
-triss ask --paths src/**/*.ts --question "..." --provider zai --model glm-5.2 --effort high
+triss ask --paths 'src/**/*.ts' --question "..." --provider zai --model glm-5.2 --effort high
 ```
+
+`--paths` accepts text files or quoted glob patterns. Directories are not read
+recursively, and an empty file corpus fails before any model call. Quote globs
+so Triss, rather than the shell, expands them.
 
 The provider runtime returns a structured bullet summary with file paths and line
 numbers. Read the file yourself only when you need to make precise edits.
@@ -161,8 +165,10 @@ triss fetch https://api-docs.example.com/changelog
 ### Models
 - Providers are canonical: `openai-compatible`, `zai`, `opencode-zen`,
   `opencode-go`, `moonshot`, and `kimi-for-coding`.
-- `--model <native-id>` overrides the selected provider's role model for one
-  call. Provider-qualified model selectors are reserved for coder engine runs.
+- `--model <model>` overrides the main model for one call: a
+  `<canonical-provider>/<native-id>` selector or a bare native id resolved
+  against `--provider` or the effective default provider. An explicit
+  `--provider` that conflicts with a qualified model prefix is rejected.
 - `--effort low|medium|high|xhigh|max` is the shared reasoning control.
 - With neither `--provider` nor `--model`, commands resolve the configured
   `TRISS_DEFAULT_PROVIDER` and its `model` or `smallModel` role.
@@ -182,24 +188,28 @@ Then hand off a bounded implementation task instead of writing it yourself.
 Pass the complete task packet; keep architecture, authorization, final
 inspection, and acceptance with the host.
 
+<!-- doc-examples-legend path="coder run" -->
 ```bash
 triss coder run "<task>"
   --engine <name>     # opencode (default), opencode2 (beta — see docs/engines/opencode2.md), crush, or omp
-  --session <id>      # triss-side slug, mapped to a real opencode session id
-                       # in .triss/sessions.json (first run creates it, later
-                       # runs with the same slug continue that conversation)
-  --continue           # continue the most recent opencode session
+  --session <id>      # named session slug for the selected engine; storage and
+                       # resume compatibility are engine-specific
+  --continue           # continue a prior session using the selected engine's
+                       # supported continuation semantics
   --agent <name>       # default: coder (researcher = read-only)
-  --provider <name>    # OpenCode: one-shot provider; requires --model
-  --model <p/m>        # main model (main-only unless --provider is present)
-  --small-model <p/m>  # with --provider; defaults to the one-shot main
+  --provider <name>    # selects a canonical provider for this run
+  --model <model>      # overrides the main model for this run: a
+                       # <provider>/<native-id> selector or a bare native id
+                       # resolved against --provider or the effective default;
+                       # conflicting provider selections are rejected
   --isolate            # run in a disposable git worktree (opencode default OFF, crush default ON)
   --no-isolate         # disable worktree isolation
   --protect-credentials # route the credential through Triss's parent-owned proxy
-                        # with strict executable-surface gates (best-effort raw with
-                        # a warning when unavailable; crush defaults to protected;
-                        # --no-protect-credentials overrides a persisted
-                        # TRISS_PROTECT_CREDENTIALS=true choice for this run)
+                        # with strict executable-surface gates; a selected protected
+                        # route fails closed before any credential-bearing spawn when
+                        # the raw key cannot be contained or the proxy cannot start
+                        # (no automatic downgrade to raw; crush defaults to protected;
+                        # --no-protect-credentials is the explicit raw choice for this run)
   --restrict           # crush only: opt into the CLI allowlist (--restrict-run + --allow-bash/--allow-tool)
   --no-restrict        # crush only: keep crush unrestricted (the default)
   --cwd <path>         # working dir (ignored with --isolate)

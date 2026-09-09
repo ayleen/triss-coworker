@@ -5,8 +5,8 @@ know. This is the public contract for `~/.cache/triss/usage.jsonl`, the
 `triss usage` report, the coder envelope's `usage` member, and the per-call
 usage line Triss prints to stderr.
 
-If you only want the commands, see the [`triss usage` section of the
-README](../README.md#triss-usage). This page is the schema.
+If you only want the commands, see the [Usage and pricing section of the
+README](../README.md#usage-and-pricing). This page is the schema.
 
 ## The one rule: unknown is not zero
 
@@ -148,8 +148,13 @@ Rules:
 | `opencode-go/*` | `opencode-go` |
 | `moonshot/*` | `moonshot` |
 | `kimi-for-coding/*` | `kimi-for-coding` |
-| Crush runs | `zai`, with `engine: "crush"` |
+| Crush runs | resolved canonical provider from the selected public Triss model; `engine: "crush"` |
 | OMP runs | provider from the original public Triss selector; `engine: "omp"` |
+
+The execution engine is not the provider. Crush preserves the original public
+provider/model identity for grouping and billing; the transient child alias
+does not select a price. If the identity cannot be established, the record
+keeps an explicit unknown/fallback diagnostic instead of inventing `zai`.
 
 `billing_mode` classification is **fail-closed** — when a route could have been
 served either by a subscription quota or by a balance-funded fallback and the

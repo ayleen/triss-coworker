@@ -137,7 +137,12 @@ test('ISOLATION-GATE-01: a readable raw credential store refuses the protected r
     assert.fail('the run must refuse');
   } catch (err) {
     assert.match(err.message, /raw credential store/);
-    assert.match(err.message, /--protect-credentials/);
+    // D04 contract: the recovery hint names the explicit raw choice with its
+    // consequences — NOT "rerun without --protect-credentials", which is a
+    // no-op under a persisted TRISS_*_PROTECT_CREDENTIALS=true.
+    assert.match(err.message, /--no-protect-credentials/);
+    assert.match(err.message, /best-effort, warned/);
+    assert.ok(!/rerun without --protect-credentials/.test(err.message));
   }
   assert.equal(spawned, false, 'the engine must never spawn');
 }));
@@ -256,7 +261,9 @@ test('ISOLATION-GATE-05: fail-closed policy — an unknown non-empty variable in
     assert.fail('the run must refuse');
   } catch (err) {
     assert.match(err.message, /raw credential store/);
-    assert.match(err.message, /--protect-credentials/);
+    // D04 contract: hint names the explicit raw choice (see ISOLATION-GATE-01).
+    assert.match(err.message, /--no-protect-credentials/);
+    assert.ok(!/rerun without --protect-credentials/.test(err.message));
   }
   assert.equal(spawned, false, 'arbitrary non-empty key refuses fail-closed');
 }));

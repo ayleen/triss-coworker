@@ -2472,7 +2472,7 @@ export function resolveRuntimeCoderProviderRoute(model, providerSettings, { requ
     const detail = route.unsupportedTransport || 'the model has no audited protocol/package metadata';
     throw new Error(
       `No audited protected OpenCode transport metadata is registered for model "${model}"; ${detail}. ` +
-        'Protected mode refuses to guess Chat Completions. Rerun without --protect-credentials to use the built-in OpenCode provider under the default best_effort_raw mode, after auditing persistent provider overrides.',
+        'Protected mode refuses to guess Chat Completions. Rerun with --no-protect-credentials for an explicit best-effort raw run (warned; overrides a persisted protection choice for this run), after auditing persistent provider overrides.',
     );
   }
   if (route.provider !== 'openai-compatible') return route;
@@ -6478,7 +6478,7 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     const detail = routeCandidate.unsupportedTransport || 'the model has no audited protocol/package metadata';
     throw new Error(
       `Protected routing has no audited transport for "${modelUsed}" / "${smallModelUsed}"; ${detail}. ` +
-        'Rerun without --protect-credentials to use the built-in provider under the default best_effort_raw mode, ' +
+        'Rerun with --no-protect-credentials for an explicit best-effort raw run (warned; overrides a persisted protection choice for this run), ' +
         'or set TRISS_MODEL_TRANSPORTS for the exact model.',
     );
   }
@@ -6752,10 +6752,13 @@ export async function runCoderRun(promptArg, opts = {}, deps = {}) {
     if (readableStores.length > 0) {
       if (isolation?.freshlyCreated) cleanupAbandonedIsolation(sh, isolation);
       const downgradeHint = engine !== 'crush'
-        ? 'Move the credentials into your shell environment, or rerun without --protect-credentials ' +
-          'to use the default best-effort mode.'
-        : 'Move the credentials into your shell environment, or pass --no-protect-credentials ' +
-          'to run crush with the selected raw credential (best-effort).';
+        ? 'Remove the readable credential file copies first (mode 0600 still leaves them readable by a ' +
+          'same-UID child), or pass --no-protect-credentials to run this one command with the selected raw ' +
+          'credential (best-effort, warned; overrides a persisted TRISS_CODER_PROTECT_CREDENTIALS or ' +
+          'TRISS_PROTECT_CREDENTIALS=true choice).'
+        : 'Remove the readable credential file copies first (mode 0600 still leaves them readable by a ' +
+          'same-UID child), or pass --no-protect-credentials to run crush with the selected raw credential ' +
+          '(best-effort, warned).';
       throw new Error(
         `credential isolation unavailable: the raw credential store(s) ${readableStores.join(', ')} ` +
           `are readable by the same-UID engine child, so the loopback token proxy alone cannot ` +

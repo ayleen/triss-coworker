@@ -44,10 +44,18 @@ export const SOURCE_INSTALL_COMMANDS = [
 export const WIZARD_COMMAND = "triss config wizard";
 export const ADVANCED_WIZARD_COMMAND = "triss config wizard --advanced";
 export const HEADLESS_WIZARD_COMMAND = "triss config wizard --yes --agent none";
+// Terminal-only profile fields, endpoint included. `openai-compatible` is a
+// configurable profile, not a provider detector: its built-in endpoint is
+// DeepSeek (https://api.deepseek.com/v1), so the base URL must be set
+// explicitly for any other compatible endpoint. Each command without a value
+// prompts interactively; secret input is masked and never lands in shell
+// history or in copyable arguments. These commands edit profile fields only —
+// they do not reset an existing default provider or engine.
 export const TERMINAL_PROVIDER_COMMANDS = [
-  "triss config set -g TRISS_OPENAI_COMPATIBLE_API_KEY <your key>",
-  "triss config set -g TRISS_OPENAI_COMPATIBLE_MODEL <main model>",
-  "triss config set -g TRISS_OPENAI_COMPATIBLE_SMALL_MODEL <small model>",
+  "triss config set -g TRISS_OPENAI_COMPATIBLE_BASE_URL",
+  "triss config set -g TRISS_OPENAI_COMPATIBLE_API_KEY",
+  "triss config set -g TRISS_OPENAI_COMPATIBLE_MODEL",
+  "triss config set -g TRISS_OPENAI_COMPATIBLE_SMALL_MODEL",
 ];
 export const STATUS_COMMAND = "triss status";
 
@@ -60,7 +68,9 @@ export const FIRST_TASK_COMMAND_LINES = [
 
 // Host-connection guides (step 4). The setup comment strings are part of the
 // published command block and must stay verbatim. The terminal target needs
-// no host setup, so it carries no commands.
+// no host setup, so it carries no commands. agentHelpCommand is per target:
+// agent-help defaults to the Claude flavour, so the Codex panel must pass
+// --target codex explicitly.
 export const AGENT_TARGETS = [
   {
     id: "claude",
@@ -70,6 +80,7 @@ export const AGENT_TARGETS = [
       "triss mcp install --target claude --global",
       "triss init --target claude --global",
     ],
+    agentHelpCommand: "triss agent-help --target claude",
   },
   {
     id: "codex",
@@ -79,16 +90,17 @@ export const AGENT_TARGETS = [
       "triss mcp install --target codex --global",
       "triss init --target codex --global",
     ],
+    agentHelpCommand: "triss agent-help --target codex",
   },
   {
     id: "terminal",
     label: "Terminal",
     setupComment: "",
     setupCommands: [],
+    agentHelpCommand: "triss agent-help",
   },
 ];
 
-export const AGENT_HELP_COMMAND = "triss agent-help";
 export const MCP_STATUS_COMMAND = "triss mcp status";
 
 // Pre-0.42 migration (kept verbatim from the published upgrade guidance).
@@ -103,6 +115,9 @@ export const OPENCODE2_SETUP_COMMANDS = [
   'triss coder run --engine opencode2 --model opencode-zen/deepseek-v4-flash-free "Implement the task"',
 ];
 
+// Manual OMP install — one conscious alternative. The setup wizard can also
+// install a missing engine when its plan includes installation (headless runs
+// need --install); direct runtime use still requires the binary on PATH.
 export const OMP_SETUP_COMMANDS = [
   "curl https://omp.sh/install | sh",
   "triss coder init --engine omp --provider opencode-go",

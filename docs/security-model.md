@@ -8,10 +8,12 @@ requires executable provider/engine routes to remain available with clear
 disclosure when complete safety guarantees are unavailable. Users choose
 providers, models, and engines; incomplete guarantees mean best effort with a
 truthful warning, not a prohibition. Working protections stay enabled, and an
-explicitly requested protection that cannot be provided either falls back with
-a warning (model projections) or fails closed before the credential is handed
-over (coder runs) — Triss never labels a policy preference as a technical
-impossibility or silently substitutes a different provider, model, or engine.
+explicitly requested protection that cannot actually contain the credential
+fails closed before the credential is handed over — on coder runs and on model
+tasks routed through the same child-engine path alike — while a pre-selected
+best-effort raw route runs with a truthful warning. Triss never labels a policy
+preference as a technical impossibility or silently substitutes a different
+provider, model, or engine.
 
 ## Current implementation
 
@@ -66,13 +68,18 @@ user; none of this is a filesystem sandbox.
 ## Credential handling
 
 `--protect-credentials` (MCP `protect_credentials: true`) requests the
-parent-owned loopback credential proxy. For model projections an unavailable
-protected route falls back to a best-effort raw run with a warning; for coder
-runs a requested protection that cannot actually contain the real key fails
-closed before spawn with an actionable remedy. `--no-protect-credentials`
-overrides a persisted `TRISS_PROTECT_CREDENTIALS=true` choice for one run; on
-crush it is the explicit exit from that engine's protected default into a raw
-best-effort run, which is warned in the result.
+parent-owned loopback credential proxy. A selected protected route fails
+closed — before any credential-bearing spawn — when the raw key cannot be
+contained by the checked credential boundary (for example, a readable
+credential store that a same-UID child could read) or when the proxy cannot
+start. This applies to coder runs and to model tasks routed through the same
+child-engine path; there is no automatic downgrade to raw.
+`--no-protect-credentials` is an explicit choice to run with the selected raw
+credential and a disclosed limitation; it overrides a persisted
+`TRISS_PROTECT_CREDENTIALS=true` (or coder-scoped `TRISS_CODER_PROTECT_CREDENTIALS=true`)
+choice for one run. On crush it is the explicit exit from that engine's
+protected default into a raw best-effort run, which is warned in the result.
+Worktree isolation and a credential proxy are not OS-level sandboxing.
 
 For Responses-protocol models on crush, the loopback credential proxy serves a
 bounded chat→responses bridge: model identity, credential, and endpoint pass

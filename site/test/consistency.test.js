@@ -110,15 +110,21 @@ test("website coder engines and quickstarts match repository contracts", () => {
   const opencode2Floor = opencode2Adapter.match(/OPENCODE2_MIN_VERSION_DEFAULT = '([^']+)'/)?.[1];
   assert.ok(opencode2Floor, "OpenCode 2 supported floor must be parseable from the adapter");
 
+  // Engine details are server-rendered from the shared reference data
+  // module (site/src/data/coder-reference.js); the page maps over it.
+  const coderReference = read("src/data/coder-reference.js");
   for (const engine of ["opencode", "opencode2", "crush", "omp"]) {
-    assert.match(coderPage, new RegExp(`data-engine="${engine}"`));
+    assert.match(coderReference, new RegExp(`id: "${engine}"`));
+    assert.match(coderPage, new RegExp(`data-engine=\\{engine.id\\}`));
   }
-  assert.match(coderPage, /data-engine="harness"[\s\S]*DSH plugin, not --engine/);
+  assert.match(coderPage, /CODER_ENGINES/);
+  assert.match(coderReference, /id: "harness"/);
+  assert.match(coderReference, /DSH plugin, not --engine/);
   const escapedOpenCode2Floor = opencode2Floor.replaceAll(".", "\\.");
-  assert.match(coderPage, new RegExp(`OpenCode 2 ${escapedOpenCode2Floor} or newer`));
+  assert.match(coderReference, new RegExp(`OpenCode 2 ${escapedOpenCode2Floor} or newer`));
   assert.match(readme, new RegExp(`OpenCode 2 has a supported floor of \`${escapedOpenCode2Floor}\``));
-  // Protected-credential fact stays synchronized across README and the coder page.
-  assert.match(coderPage, /project fingerprint stays local/);
+  // Protected-credential fact stays synchronized across README and the coder reference.
+  assert.match(coderReference, /project fingerprint stays local/);
   assert.match(readme, /project fingerprint stays local/);
 
   const coder = COMMANDS.find((command) => command.name === "coder");

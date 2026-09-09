@@ -158,8 +158,10 @@ test("OMP engine control supports keyboard selection and command copy", async ({
   const opencode2 = page.locator('[data-engine="opencode2"]');
   await opencode2.click();
   await expect(opencode2).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator("#engine-body")).toContainText("0.0.0-beta-19059 or newer");
-  await expect(page.locator("#engine-body")).toContainText("never one pinned build");
+  const opencode2Panel = page.locator('[data-engine-panel="opencode2"]');
+  await expect(opencode2Panel).toBeVisible();
+  await expect(opencode2Panel).toContainText("0.0.0-beta-19059 or newer");
+  await expect(opencode2Panel).toContainText("never one pinned build");
 
   const crush = page.locator('[data-engine="crush"]');
   const omp = page.locator('[data-engine="omp"]');
@@ -167,8 +169,10 @@ test("OMP engine control supports keyboard selection and command copy", async ({
   await page.keyboard.press("ArrowRight");
   await expect(omp).toBeFocused();
   await expect(omp).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator("#engine-body")).toContainText(/run-private config/i);
-  await expect(page.locator("#engine-body")).toContainText("not an OS sandbox");
+  const ompPanel = page.locator('[data-engine-panel="omp"]');
+  await expect(ompPanel).toBeVisible();
+  await expect(ompPanel).toContainText(/run-private config/i);
+  await expect(ompPanel).toContainText("not an OS sandbox");
   await expect(page.locator("#engine-command")).toHaveText('triss coder run --engine omp "your task"');
 
   await page.locator("#copy-engine-command").click();
@@ -176,6 +180,41 @@ test("OMP engine control supports keyboard selection and command copy", async ({
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('triss coder run --engine omp "your task"');
   await expect(omp).toBeVisible();
   expect(runtimeErrors).toEqual([]);
+});
+
+test("footer build-metadata link is distinguishable and keyboard operable", async ({ page }) => {
+  await page.goto("/");
+  const link = page.locator("a.footer-build-link");
+  await expect(link).toHaveAttribute("href", "/version.json");
+  const underline = await link.evaluate((element) => getComputedStyle(element).textDecorationLine);
+  expect(underline).toContain("underline");
+  await link.focus();
+  const outline = await link.evaluate((element) => getComputedStyle(element).outlineStyle);
+  expect(["solid", "auto"]).toContain(outline);
+});
+
+test("engine command scroll region is keyboard reachable with and without JS", async ({ browser }) => {
+  for (const javaScriptEnabled of [true, false]) {
+    const context = await browser.newContext({ javaScriptEnabled });
+    const page = await context.newPage();
+    await page.goto("/coder/");
+    // With JavaScript the non-selected panels are hidden, so focus the
+    // default-selected opencode panel in both modes; without JS every panel
+    // stays visible, and the omp region is additionally exercised there.
+    const region = page.locator('[data-engine-panel="opencode"] .engine-command-scroll');
+    await expect(region).toContainText('triss coder run --engine opencode "your task"');
+    await expect(region).toHaveAttribute("role", "region");
+    await expect(region).toHaveAttribute("aria-label", /opencode setup command/i);
+    await region.focus();
+    await expect(region).toBeFocused();
+    if (!javaScriptEnabled) {
+      const omp = page.locator('[data-engine-panel="omp"] .engine-command-scroll');
+      await expect(omp).toContainText('triss coder run --engine omp "your task"');
+      await omp.focus();
+      await expect(omp).toBeFocused();
+    }
+    await context.close();
+  }
 });
 
 test("command search renders hostile input only as text", async ({ page }) => {

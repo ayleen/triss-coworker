@@ -101,7 +101,7 @@ const MODEL_SELECTION_PROPERTIES = Object.freeze({
   },
   model: {
     type: 'string',
-    description: 'Provider-qualified model id, or a bare id with provider',
+    description: 'Model id: <canonical-provider>/<native-id> selector, or a bare native id resolved against provider or the effective default provider; conflicting provider selections are rejected',
   },
   engine: {
     type: 'string',
@@ -110,7 +110,7 @@ const MODEL_SELECTION_PROPERTIES = Object.freeze({
   },
   protect_credentials: {
     type: 'boolean',
-    description: 'Use parent-owned credential protection for the OpenCode model projection',
+    description: 'Use the parent-owned credential proxy for the model projection. A selected protected route fails closed before any credential-bearing spawn when the raw key cannot be contained or the proxy cannot start; there is no automatic downgrade to raw.',
   },
   effort: {
     type: 'string',
@@ -982,14 +982,14 @@ const CODER_TOOLS = [
         engine: {
           type: 'string',
           enum: ['opencode', 'opencode2', 'crush', 'omp'],
-          description: 'Coding engine (default: opencode V1; opencode2 is the V2 beta; omp uses the pinned Oh My Pi headless adapter; crush uses Z.AI GLM; or TRISS_CODER_ENGINE)',
+          description: 'Coding engine (default: opencode V1; opencode2 is the V2 beta; omp uses the pinned Oh My Pi headless adapter; crush is the provider-neutral single-envelope engine; or TRISS_CODER_ENGINE)',
         },
         session: {
           type: 'string',
           pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$',
-          description: 'Session slug, reused across calls via .triss/sessions.json to continue a conversation',
+          description: 'Named session slug for the selected engine; storage and resume compatibility are engine-specific',
         },
-        continue: { type: 'boolean', description: 'Continue the most recent session of the resolved engine (opencode/opencode2 keep separate session maps)' },
+        continue: { type: 'boolean', description: 'Continue a prior session using the resolved engine\'s supported continuation semantics' },
         agent: { type: 'string', description: 'agent template to use (V1 default: coder; opencode2 beta uses its built-in primary agent unless set)' },
         provider: MODEL_SELECTION_PROPERTIES.provider,
         model: MODEL_SELECTION_PROPERTIES.model,
@@ -998,7 +998,7 @@ const CODER_TOOLS = [
         allowBestEffortCallerWorktree: { type: 'boolean', description: 'Explicit opt-in (default FALSE) for caller-worktree execution fallback when isolation cannot be established (without it, such a run fails before spawn with TRISS_CODER_ISOLATION_ENFORCEMENT_REQUIRED; with it, warns TRISS_CODER_ISOLATION_DOWNGRADED and runs as best_effort_caller_worktree).' },
         allow_best_effort_caller_worktree: { type: 'boolean', description: 'Snake-case alias of allowBestEffortCallerWorktree (the handler already accepts it; declared so schema-filtering clients forward it).' },
         protectCredentials: { type: 'boolean', description: 'Deprecated camelCase spelling retained for existing triss_coder_run clients. Use protect_credentials for new calls; both spellings merge as a tri-state — an explicit boolean survives verbatim.' },
-        protect_credentials: { type: 'boolean', description: 'Use the parent-owned credential proxy and strict executable-surface gates where the selected engine supports them; otherwise run best-effort with a warning. Tri-state: absent keeps the engine default (crush: protected), true enables the proxy, an explicit false overrides a persisted protection choice and runs with the selected raw credential.' },
+        protect_credentials: { type: 'boolean', description: 'Use the parent-owned credential proxy and strict executable-surface gates. Tri-state boolean: absent keeps the engine default (crush: protected), true enables the proxy, an explicit false runs with the selected raw credential and overrides a persisted protection choice. A selected protected route fails closed before any credential-bearing spawn when the raw key cannot be contained or the proxy cannot start; there is no automatic downgrade to raw.' },
         cwd: { type: 'string', description: 'Working directory (ignored with isolate; sandboxed under MCP)' },
         timeout: { type: 'number', description: 'Seconds before the engine is killed (default 1500 over MCP)' },
       },
@@ -1038,12 +1038,12 @@ const CODER_TOOLS = [
   },
 ];
 
-export async function listTools() {
-  // Defensive: ensure env files are loaded even when listTools is called
-  // outside the server lifecycle (e.g. from tests).
-  loadEnvFiles();
-  const integrations = await loadIntegrations();
-  const ready = new Set(integrations.filter((m) => envReadiness(m).ready).map((m) => m.name));
+// Pure assembly of the tool inventory from readiness facts. Side-effect-free
+// by design: the public-reference generator and contract tests call this with
+// fake readiness fixtures instead of touching the environment, while the
+// server path (listTools) derives the same facts for real.
+export function assembleTools({ readyIntegrations = [], coderReady = false } = {}) {
+  const ready = new Set(readyIntegrations);
   const tools = [...CORE_TOOLS];
   if (ready.has('jira')) tools.push(...JIRA_TOOLS);
   if (ready.has('linear')) tools.push(...LINEAR_TOOLS);
@@ -1051,8 +1051,20 @@ export async function listTools() {
   if (ready.has('confluence')) tools.push(...CONFLUENCE_TOOLS);
   if (ready.has('gitlab')) tools.push(...GITLAB_TOOLS);
   // Coder tools surface once any canonical provider credential is configured.
-  if (coderCredentialReady()) tools.push(...CODER_TOOLS);
+  if (coderReady) tools.push(...CODER_TOOLS);
   return tools;
+}
+
+export async function listTools() {
+  // Defensive: ensure env files are loaded even when listTools is called
+  // outside the server lifecycle (e.g. from tests).
+  loadEnvFiles();
+  const integrations = await loadIntegrations();
+  const ready = integrations.filter((m) => envReadiness(m).ready).map((m) => m.name);
+  return assembleTools({
+    readyIntegrations: ready,
+    coderReady: coderCredentialReady(),
+  });
 }
 
 export async function findTool(name) {

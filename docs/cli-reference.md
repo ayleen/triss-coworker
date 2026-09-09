@@ -1,13 +1,24 @@
 # CLI reference
 
 The executable reference is `triss --help` and each command's `--help` output.
-The main command groups are model delegation (`ask`, `chat`, `write`, `fetch`,
-`review`, `commit-msg`), coder engines (`coder`), MCP setup (`mcp`), tracker
-integrations, configuration, usage accounting, and updates.
+This page documents the main command groups and the sections whose semantics
+are most often misquoted; it is not an exhaustive inventory of every leaf
+command and flag. The main command groups are model delegation (`ask`, `chat`,
+`write`, `fetch`, `review`, `commit-msg`), coder engines (`coder`), MCP setup
+(`mcp`), tracker integrations, configuration, usage accounting, and updates.
 
 Machine consumers should prefer documented JSON modes and treat their schema
 version as part of the contract. Human-readable output may evolve without a
 schema migration.
+
+This package ships a machine-generated inventory at
+[docs/generated/cli-reference.md](generated/cli-reference.md) — every
+registered command path, argument, and option, including the dynamically
+registered tracker commands — re-verified against the executable CLI in CI.
+The MCP inventory lives next to it as
+[docs/generated/mcp-reference.md](generated/mcp-reference.md). For the
+exact contract of an installed version, browse these files pinned to your
+release tag in the repository.
 
 ## `triss config wizard`
 
@@ -19,7 +30,8 @@ triss config wizard                      # Easy: provider + key, assistant hosts
 triss config wizard --advanced           # full sections: providers, execution, connections, integrations, runtime
 triss config wizard --standard           # explicit Easy path (alias of the default interactive flow)
 triss config wizard <target>             # a canonical provider id, `coder`, or an integration name (jira | linear | …)
-triss config wizard --local|--global     # project ./.triss.env or global ~/.config/triss/.env
+triss config wizard --local              # project scope: ./.triss.env
+triss config wizard --global             # global scope: ~/.config/triss/.env
 triss config wizard --yes                # non-interactive apply of a complete configuration from files + env + flags
 triss config wizard --agent <agent>      # headless host intent: claude | codex | both | none (non-TTY default: none)
 triss config wizard --install            # allow installing missing engines in a headless run
@@ -42,26 +54,35 @@ of resetting them. The wizard's coder-target flags are `--coder-engine <name>`,
 
 ## `triss init --setup`
 
-`triss init` writes the delegation block into agent rule files. With
-`-s, --setup` it hands control to `triss config wizard` BEFORE any rules
-write: the wizard owns which host files change, and its host actions invoke
-the rules pass with the agent/scope intent resolved during setup, so one
-command still produces a working setup. The wizard asks its own scope (or
-defaults silently to global in non-TTY).
+`triss init` manages the Triss block in the selected host rule files. With
+`-s, --setup` it delegates to the setup wizard BEFORE any rules write: the
+wizard owns the host actions, and its host actions invoke the rules pass with
+the agent/scope intent resolved during setup, so one command still produces a
+working setup. `init --setup` preserves init's scope intent: project scope
+without `--global`, global scope with `--global`. This differs from invoking
+`triss config wizard` directly, which asks its own scope. In non-interactive
+use, pass `--yes` and provide a complete configuration. Codex MCP registration
+remains global even when project-local rule files are requested. A run can
+still end incomplete after the env/host configuration has been applied (for
+example, a skipped or failed engine install); that outcome is reported on top
+of the already-written configuration and is not a transaction that undoes it.
 
 ## Credential protection flags
 
 Model-backed commands (`ask`, `chat`, `write`, `review`, `fetch`,
 `commit-msg`) and coder commands accept:
 
-- `--protect-credentials` — request the parent-owned credential proxy. When a
-  verified protected route is unavailable for the selected engine, the run
-  falls back to best-effort raw execution with a warning (MCP results carry it
-  in structured `warnings`).
-- `--no-protect-credentials` — override a persisted
+- `--protect-credentials` — request the parent-owned credential proxy. A
+  selected protected route fails closed — before any credential-bearing spawn —
+  when the raw key cannot be contained by the checked credential boundary or
+  when the proxy cannot start; there is no automatic downgrade to raw. This
+  applies to coder runs and to model tasks routed through the same
+  child-engine path. Warnings that do occur (for an explicit best-effort raw
+  choice or an engine limitation) are carried in MCP structured `warnings`.
+- `--no-protect-credentials` — an explicit choice to run with the selected raw
+  credential and a disclosed limitation for one run; it overrides a persisted
   `TRISS_PROTECT_CREDENTIALS=true` (or `TRISS_CODER_PROTECT_CREDENTIALS=true`)
-  choice for one run. For crush this is the explicit raw exit from its
-  protected default.
+  choice. For crush this is the explicit raw exit from its protected default.
 
 `triss config wizard` accepts the coder-target pair
 `--coder-protect-credentials` / `--coder-no-protect-credentials`. They persist

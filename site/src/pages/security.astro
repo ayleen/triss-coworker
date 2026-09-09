@@ -5,6 +5,7 @@
 import Base from "../layouts/Base.astro";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
+import { DIRECT_DEPENDENCY_COUNT } from "../data/facts.js";
 ---
 
 <Base title="Security & privacy — Triss" description="Triss sits between an agent, your filesystem, and your credentials. The trust boundary spelled out plainly.">
@@ -18,7 +19,7 @@ import Footer from "../components/Footer.astro";
     <div style="display: grid; grid-template-columns: repeat(4, auto); gap: 34px; margin-top: 38px; padding-top: 26px; border-top: 1px solid var(--color-border); justify-content: start;">
       <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">no telemetry</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">zero data to the developers</div></div>
       <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">local-first</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">CLI, not hosted service</div></div>
-      <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">7 deps</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">plain ESM, no build</div></div>
+      <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">{DIRECT_DEPENDENCY_COUNT} direct deps</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">counted from the package manifest</div></div>
       <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">signed releases</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">GPG tags + npm provenance</div></div>
       <div><div style="font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--color-accent);">MIT</div><div style="font-size: 12.5px; color: var(--color-text-faint); margin-top: 5px;">auditable on GitHub</div></div>
     </div>
@@ -55,7 +56,7 @@ import Footer from "../components/Footer.astro";
       <div style="background: var(--color-bg-raised); padding: 24px; display: flex; flex-direction: column; gap: 12px;">
         <div style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-faint);">you configure it</div>
         <div style="font-size: 17px; font-weight: 600; color: var(--color-text-heading); letter-spacing: -0.02em;">The model endpoint</div>
-        <p style="margin: 0; font-size: 14px; line-height: 1.65; color: var(--color-text-secondary);">Prompts and the selected corpus go to the OpenAI-compatible endpoint you set.</p>
+        <p style="margin: 0; font-size: 14px; line-height: 1.65; color: var(--color-text-secondary);">Prompts and the selected context go to the resolved endpoint of your selected canonical provider. Triss uses the transport required by that provider/model route.</p>
         <div style="margin-top: auto; padding-top: 14px; border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 11.5px; color: var(--color-text-label);">TRISS_DEFAULT_PROVIDER + provider endpoint field</div>
       </div>
       <div style="background: var(--color-bg-raised); padding: 24px; display: flex; flex-direction: column; gap: 12px;">
