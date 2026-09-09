@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.1] — 2026-09-09
+
+### Fixed
+
+- All nine open Dependabot security alerts (#21–#29) are closed in one
+  sweep. Root package: `hono` 4.13.7 (CVE-2026-84363 query-parser fragment
+  differential, CVE-2026-84364 `parseBody()` memory exhaustion,
+  CVE-2026-84365 `toSSG()` path traversal) and `js-yaml` 4.3.2
+  (CVE-2026-84375). Site: `astro` 7.3.2 (critical RCE via AVIF image
+  optimization, GHSA-26w7-cxv4-gfx2), `sharp` 0.35.4 (libheif
+  GHSA-g89c-p67h-r497, GHSA-2jg2-4ch7-h545), `js-yaml` 4.3.2, and `svgo`
+  4.1.0 (CVE-2026-84369, CVE-2026-84370). `npm audit` reports 0
+  production vulnerabilities for the root package and the site.
+- Carried dependency groups superseded from Dependabot: `@anthropic-ai/sdk`
+  ^0.124.0 (production) and the development-dependencies group (`keyv`
+  5.6.0, `flat-cache` 6.1.23 lockfile-only).
+
+### Changed
+
+- The 2026-09-08 documentation audit landed (D01–D16, A01–A03): generated
+  CLI and MCP references, security-model and getting-started updates, and
+  packaged-documentation acceptance in the publish pipeline.
+- `triss-dsh-provider-bundle` is version-aligned at 0.44.1 and republished
+  unchanged; its OpenCode Zen, OpenCode Go, and Z.AI routes are unchanged.
+
+### Artifact integrity (0.44.1)
+
+- `triss-dsh-provider-bundle-0.44.1.tgz` — sha256
+  `76b74f0092665c9f0a4e7cc1060f8f359ea9de04be59cd24557580d4f71ec3a1`
+  — `sha512-8/taMLUGjQjM2i4HME6gcZev+XycbhR6TmNv0zKtbPxT66MzVm98w3aZ1LPK3oNqqkPEMWz1yGMP5n1rGUdmNw==`
+  (computed with npm pack; the output is byte-deterministic).
+- Root `triss-coworker-0.44.1.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.44.1`; the root tarball ships `CHANGELOG.md`, so its hash cannot
+  be recorded inside this file. Registry verification compares the packed
+  artifact with the published tarball byte-for-byte.
+
 ## [0.44.0] — 2026-09-08
 
 ### Added

@@ -14,6 +14,27 @@ Format:
 
 <!-- add new entries below this line -->
 
+## 2026-09-09 — Dependabot PR saturation hid the critical alert (security cycle 2026-09)
+
+**What happened.** `open-pull-requests-limit: 5` was saturated with open
+security PRs, so the CRITICAL astro RCE alert (#29) had no Dependabot PR
+of its own and stayed invisible while the lower-severity alerts looked
+"already handled" by the queued PRs. The cycle also lost extra rounds to
+three gotchas: miniflare pins `sharp` exactly, so the site bump needed a
+caret override; `tail-pipe` swallowed npm's exit codes during
+verification; and root timing tests flaked while the site suite ran
+concurrently.
+
+**Root cause.** The alert list was implicitly trusted to mirror PR
+coverage. Dependabot opens at most `open-pull-requests-limit` PRs, and
+unmerged security PRs occupy those slots, so newer — and more severe —
+alerts can be left with no PR at all.
+
+**Prevention.** On every security cycle, diff the open-alert list against
+open Dependabot PRs and read alert severities directly; never infer
+coverage from PR presence. If PR slots are saturated, clear all alerts
+with one combined sweep that supersedes the stale PRs.
+
 ## 2026-09-09 — lexers worked per physical line, not per logical unit (PR #122 H01/H02)
 
 **What happened.** The fifth re-review found both dev-tool parsers still
