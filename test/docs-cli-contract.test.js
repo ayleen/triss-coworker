@@ -22,6 +22,8 @@ import {
   checkRepositoryDocs,
   collectCliFacts,
   checkInvocation,
+  lexShellCommands,
+  parseCliInvocation,
   validateRunnableExamples,
 } from '../scripts/check-doc-examples.js';
 import { COMMANDS } from '../site/src/data/commands.js';
@@ -278,6 +280,66 @@ test('G01: a mutated heredoc header in each real agent template is detected', as
     assert.ok(
       findings.some((finding) => /--small-model/.test(finding.message)),
       `${rel}: the mutated heredoc header must be rejected: ${JSON.stringify(findings)}`,
+    );
+  }
+});
+
+// H01 (review round 5): a heredoc body starts only at the END of the logical
+// command header. A trailing backslash continues the SAME header — the next
+// physical line is still argv and must reach the CLI validation, never be
+// swallowed as stdin content.
+
+test('H01: a continued heredoc header cannot hide an unknown flag', async () => {
+  const facts = await collectCliFacts();
+  for (const delimiter of ['TASK', "'TASK'", '"TASK"']) {
+    const findings = validateRunnableExamples(
+      facts,
+      `\`\`\`bash\ntriss coder run --stdin <<${delimiter} \\\n  --small-model x\nTask body\nTASK\n\`\`\``,
+    );
+    assert.ok(
+      findings.some((finding) => /--small-model/.test(finding.message)),
+      `<<${delimiter}: the continuation line is argv, not heredoc body: ${JSON.stringify(findings)}`,
+    );
+  }
+});
+
+test('H01: a valid continued heredoc header keeps its bound options', async () => {
+  const facts = await collectCliFacts();
+  const { commands, issues, unverified } = lexShellCommands(
+    "triss coder run --stdin <<'TASK' \\\n  --isolate\nTask body\nTASK".split('\n'),
+    2,
+  );
+  assert.deepEqual(issues, [], JSON.stringify(issues));
+  assert.deepEqual(unverified, [], JSON.stringify(unverified));
+  assert.equal(commands.length, 1);
+  const parsed = parseCliInvocation({ integrations: facts.integrations, argv: commands[0].tokens.slice(1) });
+  assert.equal(parsed.status, 'command');
+  assert.equal(
+    parsed.options.isolate,
+    true,
+    '--isolate must bind to coder run, not disappear into the stdin body',
+  );
+});
+
+test('H01: a continued-header mutation in each real agent template is detected', async () => {
+  const facts = await collectCliFacts();
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  for (const rel of ['templates/claude-full.md', 'templates/codex-full.md']) {
+    const text = readFileSync(join(root, rel), 'utf8');
+    assert.match(
+      text,
+      /^triss coder run --stdin --isolate <<'TASK'$/m,
+      `${rel} must contain the documented heredoc example`,
+    );
+    const mutated = text.replace(
+      /^triss coder run --stdin --isolate <<'TASK'$/m,
+      "triss coder run --stdin --isolate <<'TASK' \\\n  --small-model x",
+    );
+    assert.notEqual(mutated, text, `the ${rel} mutation must change the text`);
+    const findings = validateRunnableExamples(facts, mutated);
+    assert.ok(
+      findings.some((finding) => /--small-model/.test(finding.message)),
+      `${rel}: the continued mutated header must be rejected: ${JSON.stringify(findings)}`,
     );
   }
 });

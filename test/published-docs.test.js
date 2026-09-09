@@ -205,6 +205,29 @@ test('G01: a bad flag inside a heredoc example is rejected through validatePacka
   );
 });
 
+// H01 (review round 5): the same guard must catch the flag when the heredoc
+// header is continued onto the next physical line with a trailing backslash —
+// the continuation is argv of the same command, not stdin body.
+test('H01: a continued heredoc header is rejected through validatePackagedDocs', async () => {
+  const readme = [
+    '# Triss Coworker',
+    '',
+    '```bash',
+    "triss coder run --stdin <<'TASK' \\",
+    '  --small-model zai/glm-5',
+    'Fix the reported defect.',
+    'TASK',
+    '```',
+    '',
+  ].join('\n');
+  const root = makePackageRoot({ readme });
+  const { findings } = await validatePackagedDocs({ packageRoot: root, expectedVersion: '1.0.0' });
+  assert.ok(
+    findings.some((finding) => finding.startsWith('README.md:') && /--small-model/.test(finding)),
+    JSON.stringify(findings, null, 2),
+  );
+});
+
 test('missing files and version drift are reported', async () => {
   const root = mkdtempSync(join(tmpdir(), 'triss-published-docs-'));
   writeFileSync(join(root, 'package.json'), JSON.stringify({

@@ -169,6 +169,11 @@ function flagsForPath(facts, pathKey) {
 // words STAY in argv and are validated — only the redirection word itself is
 // dropped; the body is never parsed as commands.
 //
+// The header decides when it is over (review H01): a `<<` declaration only
+// queues a pending delimiter — the body reading starts at the logical end of
+// the command header, after open quotes close and backslash continuations
+// resolve, so arguments on a continued header line are still validated.
+//
 // Returns:
 //   commands:   [{ tokens, startLine, endLine, unsupported, reason? }]
 //   issues:     [{ line, message }] — unterminated quote or heredoc at fence end.
@@ -187,7 +192,8 @@ export function lexShellCommands(rawLines, startLine) {
   let unsupported = false;
   let unsupportedReason = null;
   let continuation = false; // unquoted trailing backslash (or inside double quotes)
-  let heredocs = []; // pending terminators in order: { delim, stripTabs, startOffset }
+  let pendingHeredocs = []; // delimiters declared by the header still being read
+  let heredocBody = []; // delimiters whose bodies are being consumed, in order
   let currentStart = 0;
 
   const flushToken = () => {
@@ -220,14 +226,21 @@ export function lexShellCommands(rawLines, startLine) {
     unsupportedReason = null;
     currentStart = offset;
   };
+  const beginHeredocBodies = () => {
+    if (pendingHeredocs.length > 0) {
+      heredocBody = pendingHeredocs;
+      pendingHeredocs = [];
+    }
+  };
 
   rawLines.forEach((raw, offset) => {
-    // Heredoc body: consumed by the FIRST pending delimiter (`<<-` strips
-    // leading tabs first). A plain `<<` terminator must be the whole line.
-    if (heredocs.length > 0) {
-      const head = heredocs[0];
+    // Active heredoc body: consumed by the FIRST pending delimiter (`<<-`
+    // strips leading tabs first). A plain `<<` terminator must be the whole
+    // line. Body lines are never parsed as commands.
+    if (heredocBody.length > 0) {
+      const head = heredocBody[0];
       const candidate = head.stripTabs ? raw.replace(/^\t+/, '') : raw;
-      if (candidate === head.delim) heredocs.shift();
+      if (candidate === head.delim) heredocBody.shift();
       return;
     }
     // A command that has not begun yet starts on THIS physical line.
@@ -342,7 +355,7 @@ export function lexShellCommands(rawLines, startLine) {
           i = parsed.next - 1;
           continue;
         }
-        heredocs.push({ delim: parsed.delim, stripTabs: parsed.stripTabs, startOffset: offset });
+        pendingHeredocs.push({ delim: parsed.delim, stripTabs: parsed.stripTabs, startOffset: offset });
         flushToken(); // the redirection word is syntax, not argv
         i = parsed.next - 1;
         continue;
@@ -350,18 +363,14 @@ export function lexShellCommands(rawLines, startLine) {
       current += char;
       hasToken = true;
     }
-    // End of physical line: the state decides whether the command continues.
-    if (heredocs.length > 0) {
-      // The introducing command ends at this line; the body lines follow.
-      comment = false;
-      continuation = false;
-      flushCommand(offset);
-      return;
-    }
+    // End of physical line: the logical header decides when it is over
+    // (review H01) — an open quote or a trailing backslash continues the
+    // SAME command, and only a real end starts heredoc body reading.
     if (comment) {
       comment = false;
-      flushCommand(offset);
       continuation = false;
+      flushCommand(offset);
+      beginHeredocBodies();
       return;
     }
     if (quote === "'") {
@@ -375,16 +384,18 @@ export function lexShellCommands(rawLines, startLine) {
       return;
     }
     if (continuation) {
-      continuation = false; // next physical line continues this command
-      return;
+      continuation = false; // next physical line continues this header;
+      return; // pending heredocs stay pending — the body starts only at a real end
     }
     flushCommand(offset);
+    beginHeredocBodies();
   });
-  if (heredocs.length > 0) {
+  const openHeredoc = heredocBody[0] ?? pendingHeredocs[0];
+  if (openHeredoc) {
     issues.push({
-      line: startLine + heredocs[0].startOffset,
+      line: startLine + openHeredoc.startOffset,
       message:
-        `unterminated heredoc: the "${heredocs[0].delim}" delimiter line never appears ` +
+        `unterminated heredoc: the "${openHeredoc.delim}" delimiter line never appears ` +
         'before the end of the example — the command is incomplete',
     });
   }
