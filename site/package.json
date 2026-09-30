@@ -38,7 +38,7 @@
     "parse5": "8.0.1",
     "png-to-ico": "^3.0.2",
     "typescript": "^5.5.0",
-    "wrangler": "4.125.0"
+    "wrangler": "4.144.0"
   },
   "overrides": {
     "sharp": "^0.35.4"
