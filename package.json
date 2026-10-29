@@ -1,6 +1,6 @@
 {
   "name": "triss-coworker",
-  "version": "0.44.2",
+  "version": "0.44.3",
   "description": "Managed delegation for AI development. Delegate research, code review, and implementation through a local CLI and MCP server.",
   "type": "module",
   "bin": {
@@ -102,7 +102,7 @@
     "commander": "^15.0.0",
     "dotenv": "^18.0.9",
     "linkedom": "^0.18.14",
-    "openai": "^7.43.0",
+    "openai": "^7.45.0",
     "picocolors": "^1.1.1",
     "turndown": "^7.2.4"
   },

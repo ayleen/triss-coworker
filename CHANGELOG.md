@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.3] — 2026-10-30
+
+### Changed
+
+- Update the OpenAI SDK from 7.43.0 to 7.45.0 (Dependabot #154).
+- Update the SHA-pinned CodeQL SARIF upload action from 4.38.3 to 4.39.1
+  (Dependabot #143).
+- Align `triss-dsh-provider-bundle` at 0.44.3; its provider configuration
+  remains unchanged.
+
+
+### Artifact integrity (0.44.3)
+
+- `triss-dsh-provider-bundle-0.44.3.tgz` — sha256
+  `26a85cbc4403e9813a2f3fa78119f4a64d917fa7e66399084d7d5058e946d3b6`
+  — `sha512-KKKlMmiRzOAzUZQN+rJr/7KYhOdGPITvYqLSbepYkqA34q/K41/K5hGP1TDYqij3ajFZqs3smSs/9kPjXgk2wQ==`
+  (computed with npm pack; the output is byte-deterministic).
+- Root `triss-coworker-0.44.3.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.44.3`; its tarball includes this changelog, so its hash is verified
+  separately rather than embedded here.
+
 ## [0.44.2] — 2026-10-29
 
 ### Fixed
