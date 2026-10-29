@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep the pinned Harness npx acceptance check executable by installing its
+  required peer dependencies explicitly instead of hanging in npm peer
+  hoisting. The real add/remove and provider-route checks remain enabled.
 - Update production and development dependencies, including Anthropic SDK
   1.3.0, MCP SDK 1.32.2, dotenv 18.0.9, linkedom 0.18.14 and OpenAI SDK
   7.43.0, and refresh vulnerable transitive dependencies.

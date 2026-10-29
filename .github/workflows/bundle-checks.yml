@@ -213,12 +213,41 @@ jobs:
           }
           EOF
       - name: Full add/remove lifecycle through an npx-style Harness anchor
+        timeout-minutes: 5
         run: |
           export DSH_HOME="$RUNNER_TEMP/dsh-npx-home"
+          # npm's automatic peer hoisting loops on this Harness's cyclic peers.
+          # Supply the required peers at the versions verified in the working
+          # global anchor; keep the real npx add/remove and route assertions.
+          harness_npx_packages=(
+            --package @deepseek-ai/dsh@0.1.0-rc.6
+            --package @deepseek-ai/cordis-plugin-group@1.0.5
+            --package @deepseek-ai/dsh-anonymous-user-id@0.1.0-rc.8
+            --package @deepseek-ai/dsh-atomic-write@0.1.0-rc.8
+            --package @deepseek-ai/dsh-bash-local@0.1.0-rc.8
+            --package @deepseek-ai/dsh-code-runtime@0.1.0-rc.8
+            --package @deepseek-ai/dsh-compaction@0.1.0-rc.8
+            --package @deepseek-ai/dsh-fs@0.1.0-rc.8
+            --package @deepseek-ai/dsh-invariants@0.1.0-rc.8
+            --package @deepseek-ai/dsh-output-retention@0.1.0-rc.8
+            --package @deepseek-ai/dsh-sandbox@0.1.0-rc.8
+            --package @deepseek-ai/dsh-scope@0.1.0-rc.8
+            --package @deepseek-ai/dsh-session-telemetry@0.1.0-rc.8
+            --package @deepseek-ai/dsh-session-title-llm@0.1.0-rc.8
+            --package @deepseek-ai/dsh-shell@0.1.0-rc.8
+            --package @deepseek-ai/dsh-spill@0.1.0-rc.8
+            --package @deepseek-ai/dsh-subagent-in-process-driver@0.1.0-rc.8
+            --package @deepseek-ai/dsh-timeout@0.1.0-rc.8
+            --package @deepseek-ai/dsh-workflow@0.1.0-rc.8
+            --package react@18.3.1
+          )
+          run_npx_harness() {
+            npx --yes --legacy-peer-deps "${harness_npx_packages[@]}" dsh "$@"
+          }
           V1=$(ls /tmp/lifecycle/pack/triss-dsh-provider-bundle-*.tgz | grep -v -- '-lifecycle\.')
-          npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh plugin --profile headless add -w "$V1"
-          npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh --profile headless --dump-config > /tmp/lifecycle/dump-npx.yml
+          run_npx_harness plugin --profile headless add -w "$V1"
+          run_npx_harness --profile headless --dump-config > /tmp/lifecycle/dump-npx.yml
           node scripts/dsh-dump-assert.js present /tmp/lifecycle/dump-npx.yml
-          npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh plugin --profile headless remove triss-dsh-provider-bundle
-          npx --yes --package @deepseek-ai/dsh@0.1.0-rc.6 dsh --profile headless --dump-config > /tmp/lifecycle/dump-npx-removed.yml
+          run_npx_harness plugin --profile headless remove triss-dsh-provider-bundle
+          run_npx_harness --profile headless --dump-config > /tmp/lifecycle/dump-npx-removed.yml
           node scripts/dsh-dump-assert.js absent /tmp/lifecycle/dump-npx-removed.yml
