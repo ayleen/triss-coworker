@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.2] — 2026-10-29
+
+### Fixed
+
+- Keep the pinned Harness npx acceptance check executable by installing its
+  required peer dependencies explicitly instead of hanging in npm peer
+  hoisting. The real add/remove and provider-route checks remain enabled.
+- Update production and development dependencies, including Anthropic SDK
+  1.3.0, MCP SDK 1.32.2, dotenv 18.0.9, linkedom 0.18.14 and OpenAI SDK
+  7.43.0, and refresh vulnerable transitive dependencies.
+- Keep standalone builds within the existing installer archive limits by
+  omitting dependency source maps and TypeScript declaration files. Runtime
+  sources, package metadata and licenses remain included.
+- Refresh website dependencies, including Wrangler and Undici security fixes.
+  Website development and builds require Node >=22.22.0; the CLI runtime
+  requirement remains Node >=22.12.0.
+
+### Changed
+
+- Incorporate the dependency updates from Dependabot PRs #137, #139,
+  #141–#145, #147, #148 and #150–#152. MCP SDK 1.32.2 supersedes the older
+  1.32.0 proposal. GitHub Actions remain pinned to immutable commit hashes.
+- Align `triss-dsh-provider-bundle` at 0.44.2; provider routes and settings
+  remain unchanged.
+
+
+### Artifact integrity (0.44.2)
+
+- `triss-dsh-provider-bundle-0.44.2.tgz` — sha256
+  `46b4b875bc4f8f833765200bbb4440bd7ddbe60699f4acfc32f3ba6eea055528`
+  — `sha512-XsGZTWVLVyvNqatXyXc3/xjq/bCrd9Nt913oWrZA28ytCKTZEZ+8se2Kw5JQTbju+AL4sIR42irbdyhEi5S3rg==`
+  (computed with npm pack; the output is byte-deterministic).
+- Root `triss-coworker-0.44.2.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.44.2`; its tarball includes this changelog, so its hash is verified
+  separately rather than embedded here.
+
 ## [0.44.1] — 2026-09-09
 
 ### Fixed

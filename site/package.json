@@ -6,7 +6,7 @@
   "description": "Triss project website (Astro + Cloudflare Workers Static Assets)",
   "packageManager": "npm@11.6.2",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.22.0"
   },
   "scripts": {
     "dev": "astro dev",
@@ -38,7 +38,7 @@
     "parse5": "8.0.1",
     "png-to-ico": "^3.0.2",
     "typescript": "^5.5.0",
-    "wrangler": "4.125.0"
+    "wrangler": "4.156.0"
   },
   "overrides": {
     "sharp": "^0.35.4"

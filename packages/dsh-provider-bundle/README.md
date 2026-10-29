@@ -28,7 +28,7 @@ The bundle declares only `id` + credential references. Endpoints, protocols, mod
   pnpm `9.0.0`; revisit when either pin moves.
 - A Harness profile that already includes `@deepseek-ai/dsh-base` (this bundle does not own the runner or UI layer)
 
-Tested with: `@deepseek-ai/dsh` at commit `47f9438`, `@deepseek-ai/dsh-llm-pi-ai@0.1.0-rc.5`, resolved `@earendil-works/pi-ai@0.82.1`. This package installs only into Harness profiles; global installation is unsupported because it would recreate an installation-anchor ambiguity.
+Initial provider-call acceptance (historical): `@deepseek-ai/dsh` at commit `47f9438`, `@deepseek-ai/dsh-llm-pi-ai@0.1.0-rc.5`, resolved `@earendil-works/pi-ai@0.82.1`. This package installs only into Harness profiles; global installation is unsupported because it would recreate an installation-anchor ambiguity.
 
 ## Install
 
@@ -45,7 +45,7 @@ Only `headless` terminates by itself; `web` blocks waiting for a client, and a c
 ```bash
 pnpm --version
 node --version
-dsh plugin --profile headless add -w triss-dsh-provider-bundle@0.44.1
+dsh plugin --profile headless add -w triss-dsh-provider-bundle@0.44.2
 dsh --profile headless --dump-config
 ```
 
@@ -62,8 +62,8 @@ Tested tuple (packed-tarball fixture, `dsh plugin` full cycle — add, remove, r
 | Node | `v22.23.1` (satisfies `^22.19.0`) |
 | pnpm | `9.0.0` (lockfileVersion `9.0`) |
 | `@deepseek-ai/dsh` | `0.1.0-rc.6` |
-| Profile template | `dsh-headless@0.1.0-rc.6` (bundles: `dsh-base` + `dsh-headless`) |
-| This package | `0.44.1` |
+| Profile template | `dsh-headless@0.1.0-rc.8` (Harness anchor: `dsh-base@0.1.0-rc.8`) |
+| This package | `0.44.2` |
 
 Artifact integrity (tarball sha256/sha512) for each release is recorded in the
 root repository `CHANGELOG.md` release entry — it cannot be embedded here,

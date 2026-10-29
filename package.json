@@ -1,6 +1,6 @@
 {
   "name": "triss-coworker",
-  "version": "0.44.1",
+  "version": "0.44.2",
   "description": "Managed delegation for AI development. Delegate research, code review, and implementation through a local CLI and MCP server.",
   "type": "module",
   "bin": {
@@ -97,12 +97,12 @@
   },
   "packageManager": "npm@11.6.2",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.124.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@anthropic-ai/sdk": "^1.3.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "commander": "^15.0.0",
-    "dotenv": "^17.4.2",
-    "linkedom": "^0.18.12",
-    "openai": "^7.8.0",
+    "dotenv": "^18.0.9",
+    "linkedom": "^0.18.14",
+    "openai": "^7.43.0",
     "picocolors": "^1.1.1",
     "turndown": "^7.2.4"
   },
@@ -110,8 +110,8 @@
     "@deepseek-ai/dsh-app-boot": "^0.1.0-rc.6",
     "@eslint/js": "^10.0.1",
     "c8": "^12.0.0",
-    "eslint": "^10.3.0",
-    "fast-check": "^4.9.0",
-    "globals": "^17.6.0"
+    "eslint": "^10.12.0",
+    "fast-check": "^4.10.2",
+    "globals": "^17.13.0"
   }
 }
