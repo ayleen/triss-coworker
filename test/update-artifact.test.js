@@ -22,6 +22,22 @@ function temp(prefix) {
   return mkdtempSync(join(tmpdir(), `triss-${prefix}-`));
 }
 
+test('standalone omits dependency source maps and declarations while retaining runtime and licenses', () => {
+  const source = temp('artifact-runtime-only');
+  writeFileSync(join(source, 'package.json'), '{"name":"triss-coworker","version":"0.44.2"}\n');
+  const dependency = join(source, 'node_modules', 'example');
+  mkdirSync(dependency, { recursive: true });
+  const retained = ['index.js', 'index.cjs', 'index.mjs', 'runtime.ts', 'data.json', 'package.json', 'LICENSE'];
+  const omitted = ['index.js.map', 'index.d.ts', 'index.d.mts', 'index.d.cts', 'index.d.ts.map'];
+  for (const name of [...retained, ...omitted]) writeFileSync(join(dependency, name), name === 'package.json'
+    ? JSON.stringify({ name: 'example', version: '1.0.0', type: 'module', main: './index.js' }) : name);
+  const output = join(temp('artifact-runtime-output'), 'standalone.gz');
+  buildStandalone({ sourceDir: source, outputPath: output, version: '0.44.2' });
+  const paths = inspectArtifact(output).records.map((record) => record.path);
+  for (const name of retained) assert.ok(paths.includes(`node_modules/example/${name}`), name);
+  for (const name of omitted) assert.ok(!paths.includes(`node_modules/example/${name}`), name);
+});
+
 test('artifact bytes are canonical and deterministic', () => {
   const one = createArtifact({
     version: '0.32.0',

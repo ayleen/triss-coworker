@@ -129,6 +129,11 @@ function ignored(relativePath, isDirectory, info, docs) {
       if (!docs.traversalDirectories.has(relativePath) && !insideDirectoryRule) return true;
     } else if (!docs.files.has(relativePath) && !insideDirectoryRule) return true;
   }
+  // SDK declarations and source maps are development metadata, not runtime
+  // inputs. Omit them to stay inside the installer's existing archive bounds;
+  // retain runtime sources (including .ts), package metadata and licenses.
+  if (!isDirectory && parts[0] === 'node_modules' &&
+      /(?:\.map|\.d\.(?:ts|mts|cts))$/u.test(relativePath)) return true;
   if (relativePath.startsWith('node_modules/.cache/')) return true;
   // npm creates executable shims as symlinks in this directory.  The
   // standalone launcher never invokes package binaries, and the artifact

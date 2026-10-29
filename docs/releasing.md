@@ -61,6 +61,15 @@ links, and `npm view triss-coworker version description dist-tags --json`.
 Inspect the registry README as well: a successful push alone does not mean
 all public surfaces have updated.
 
+## Standalone dependency contents
+
+Standalone artifacts include dependency runtime files, package metadata and
+licenses. Dependency source maps (`*.map`) and TypeScript declarations
+(`*.d.ts`, `*.d.mts`, `*.d.cts`) are omitted; runtime JavaScript and TypeScript
+sources remain included. This keeps SDK updates within the existing archive
+limits without increasing the amount of untrusted data accepted by installers.
+Source-map-based dependency debugging requires an npm installation instead.
+
 ## Cutting a release
 
 After the version-bump PR is merged into `main`:
