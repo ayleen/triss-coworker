@@ -1,6 +1,6 @@
 {
   "name": "triss-coworker",
-  "version": "0.44.3",
+  "version": "0.44.4",
   "description": "Managed delegation for AI development. Delegate research, code review, and implementation through a local CLI and MCP server.",
   "type": "module",
   "bin": {
@@ -102,7 +102,7 @@
     "commander": "^15.0.0",
     "dotenv": "^18.0.9",
     "linkedom": "^0.18.14",
-    "openai": "^7.45.0",
+    "openai": "^7.47.0",
     "picocolors": "^1.1.1",
     "turndown": "^7.2.4"
   },
@@ -110,7 +110,7 @@
     "@deepseek-ai/dsh-app-boot": "^0.1.0-rc.6",
     "@eslint/js": "^10.0.1",
     "c8": "^12.0.0",
-    "eslint": "^10.12.0",
+    "eslint": "^10.14.0",
     "fast-check": "^4.10.2",
     "globals": "^17.13.0"
   }

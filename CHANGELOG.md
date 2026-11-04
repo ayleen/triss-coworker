@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.4] — 2026-11-04
+
+### Changed
+
+- Update the OpenAI SDK from 7.45.0 to 7.47.0 (Dependabot #156).
+- Update ESLint from 10.13.0 to 10.14.0, including `minimatch` 10.2.6
+  (Dependabot #157).
+- Align `triss-dsh-provider-bundle` at 0.44.4; its provider configuration
+  remains unchanged.
+
+
+### Artifact integrity (0.44.4)
+
+- `triss-dsh-provider-bundle-0.44.4.tgz` — sha256
+  `c915ed25f79e62b78bd87fe7feab3bca680b6eaf74c97663bc6810d7dc75f308`
+  — `sha512-Ru3I0739JJDCgtnVFQK8xGnf8DDAgfWWWhEPEUOrV4wHxPqLT1aCTIdFIrfXuPT8TSyAhrEJ3jCwmKN5GOH5qw==`
+  (computed with npm pack; the output is byte-deterministic).
+- Root `triss-coworker-0.44.4.tgz` sha256 is reproducible via `npm pack` at
+  tag `v0.44.4`; its tarball includes this changelog, so its hash is verified
+  separately rather than embedded here.
+
 ## [0.44.3] — 2026-10-30
 
 ### Changed
