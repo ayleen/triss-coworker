@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.5] — 2026-11-18
+
+### Security
+
+- Update the MCP SDK's transitive dependencies to Hono 4.13.19 and
+  `@hono/node-server` 2.1.9 (Dependabot alerts #85–#91). The published CLI
+  now declares these minimum versions so npm upgrades replace old copies.
+- Update Astro to 7.4.12 (Dependabot alerts #92–#93). Website development
+  and builds now require Node.js >=22.23.4. The Triss CLI still requires
+  Node.js >=22.12.0.
+- Update the development dependencies to ESLint 10.15.0, glob 14.0.6,
+  and minimatch 11.0.9 to address GHSA-3g3m-2fjr-6pw4 and GHSA-g3hv-75wg-m249.
+- Override the website toolchain's copies of `picomatch` with the
+  [patched `@ryotsu/picomatch` 4.0.7-a fork](https://github.com/ryotsu-kankichi/secured-picomatch)
+  for GHSA-fc5q-39xc-vjpf. This covers Astro, Vite, and the file watcher
+  while keeping Astro at 7.4.12.
+
+### Changed
+
+- Align `triss-dsh-provider-bundle` at 0.44.5.
+
+### Artifact integrity (0.44.5)
+
+- `triss-dsh-provider-bundle-0.44.5.tgz` — sha256
+  `30da4041323aa5d2ca7778e1773fe6bd810c165db1255ce4503b8a3fa84bdf6a`
+  — `sha512-kh8Sq1PkzduisGemllQeCdPw2RtcKVe1KCNsXvjGyqq7VhyfXb6E+fDjfuQdGFLzBcBlz3Xvk8PwywexoI2z8A==`
+  (computed with npm pack).
+- The root tarball includes this changelog. Its hash is verified separately.
+
 ## [0.44.4] — 2026-11-04
 
 ### Changed
