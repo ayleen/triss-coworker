@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.6] — 2026-11-24
+
+### Security
+
+- Require `@hono/node-server` 2.1.11 or later in the 2.x line. The update
+  fixes socket exhaustion and a process crash in the adapter's WebSocket upgrade
+  handling ([GHSA-8wcc-wqxr-28qp](https://github.com/honojs/node-server/security/advisories/GHSA-8wcc-wqxr-28qp),
+  [GHSA-qhm2-7mpr-ghjp](https://github.com/honojs/node-server/security/advisories/GHSA-qhm2-7mpr-ghjp)).
+- Verify the SHA-512 of the DeepSeek Harness CLI archive before installing it
+  in bundle and registry acceptance checks. Update the SHA-pinned Scorecard
+  action to 2.6.0, which includes Scorecard 5.7.0 security fixes.
+
+### Changed
+
+- Align the companion package `triss-dsh-provider-bundle` at 0.44.6.
+
+### Artifact integrity (0.44.6)
+
+- `triss-dsh-provider-bundle-0.44.6.tgz` — sha256
+  `54dc62abd31051fc97d6a0f3de7b66559b407bba8f2ca823481bce22048e6b06`
+  — `sha512-5qCaW9rlb6XUrjlfD1MGKf6Et4RaZoEkCyf5Lrgon5KYTTdinLs0Nl7ThyTwutAc79y7Kn6JQ9Rhoo7x1CSQKw==`
+  (computed with npm 11.6.2).
+
 ## [0.44.5] — 2026-11-18
 
 ### Security
@@ -2118,7 +2141,8 @@ pre-0.42 release after migration.
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.43.0...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.44.6...HEAD
+[0.44.6]: https://github.com/ayleen/triss-coworker/compare/v0.44.5...v0.44.6
 [0.43.0]: https://github.com/ayleen/triss-coworker/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/ayleen/triss-coworker/compare/v0.41.1...v0.42.0
 [0.41.1]: https://github.com/ayleen/triss-coworker/compare/v0.41.0...v0.41.1
