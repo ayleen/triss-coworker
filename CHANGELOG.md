@@ -16,8 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handling ([GHSA-8wcc-wqxr-28qp](https://github.com/honojs/node-server/security/advisories/GHSA-8wcc-wqxr-28qp),
   [GHSA-qhm2-7mpr-ghjp](https://github.com/honojs/node-server/security/advisories/GHSA-qhm2-7mpr-ghjp)).
 - Verify the SHA-512 of the DeepSeek Harness CLI archive before installing it
-  in bundle and registry acceptance checks. Update the SHA-pinned Scorecard
-  action to 2.6.0, which includes Scorecard 5.7.0 security fixes.
+  in bundle and registry acceptance checks.
 
 ### Changed
 
