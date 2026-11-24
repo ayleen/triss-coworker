@@ -78,9 +78,7 @@ jobs:
           corepack prepare pnpm@9.0.0 --activate
           pnpm --version
       - name: Install the pinned real Harness CLI
-        run: |
-          npm install --global @deepseek-ai/dsh@0.1.0-rc.6
-          dsh --version
+        run: bash .github/scripts/install-harness.sh
       - name: Pack the companion and a v2 fixture with a different effective patch
         run: |
           mkdir -p /tmp/lifecycle/pack /tmp/lifecycle/fixture
@@ -220,7 +218,7 @@ jobs:
           # Supply the required peers at the versions verified in the working
           # global anchor; keep the real npx add/remove and route assertions.
           harness_npx_packages=(
-            --package @deepseek-ai/dsh@0.1.0-rc.6
+            --package "$RUNNER_TEMP/dsh-0.1.0-rc.6.tgz"
             --package @deepseek-ai/cordis-plugin-group@1.0.5
             --package @deepseek-ai/dsh-anonymous-user-id@0.1.0-rc.8
             --package @deepseek-ai/dsh-atomic-write@0.1.0-rc.8
