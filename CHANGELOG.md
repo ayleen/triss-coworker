@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.7] — 2026-11-25
+
+### Changed
+
+- Raise the CLI's minimum SDK versions to `@anthropic-ai/sdk` 1.12.0
+  and `openai` 7.62.0. Update `commander` to 15.1.0, `dotenv` to
+  18.0.10, `linkedom` to 0.18.15, and `turndown` to 7.2.5 (#176).
+- Update the development dependencies `fast-check` to 4.10.3 and
+  `globals` to 17.14.0 (#172).
+- Update the GitHub Actions pins for dependency review to 5.0.1 (#169)
+  and CodeQL SARIF upload to 4.39.4 (#170).
+- Align `triss-dsh-provider-bundle` at 0.44.7.
+
+### Artifact integrity (0.44.7)
+
+- `triss-dsh-provider-bundle-0.44.7.tgz` — sha256
+  `c10be2d10f6b53c4a768dd5fb10f24d5f512adb48628847aa858475a467a8caa`
+  — `sha512-A6dqdDxnhIffx3YApO0HElMuBEvGz+gwjSHKGatsMcEkgc2O89EgXwiqJqRoytKAY9CkGGJtEC7yujuqWA8X6Q==`
+  (computed with npm 11.6.2).
+
 ## [0.44.6] — 2026-11-24
 
 ### Security
@@ -2140,7 +2160,8 @@ pre-0.42 release after migration.
 
 - Initial release of `triss-coworker`.
 
-[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.44.6...HEAD
+[Unreleased]: https://github.com/ayleen/triss-coworker/compare/v0.44.7...HEAD
+[0.44.7]: https://github.com/ayleen/triss-coworker/compare/v0.44.6...v0.44.7
 [0.44.6]: https://github.com/ayleen/triss-coworker/compare/v0.44.5...v0.44.6
 [0.43.0]: https://github.com/ayleen/triss-coworker/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/ayleen/triss-coworker/compare/v0.41.1...v0.42.0
